@@ -70,8 +70,10 @@ namespace JellyEmu.Controllers
                 return NotFound();
             }
 
-            var ext = !string.IsNullOrEmpty(item.Path) ? Path.GetExtension(item.Path) : ".iso";
-            var filename = !string.IsNullOrEmpty(item.Path) ? Path.GetFileNameWithoutExtension(item.Path) : itemId;
+            // A game in its own folder with a single ROM is served as that file, so name the URL after it.
+            var romFileForUrl = JellyEmuFileService.GetSingleRomFileInFolder(item.Path ?? string.Empty) ?? item.Path;
+            var ext = !string.IsNullOrEmpty(romFileForUrl) ? Path.GetExtension(romFileForUrl) : ".iso";
+            var filename = !string.IsNullOrEmpty(romFileForUrl) ? Path.GetFileNameWithoutExtension(romFileForUrl) : itemId;
             var cleanFilename = CleanCosmeticFilename(filename);
             if (string.IsNullOrWhiteSpace(cleanFilename)) cleanFilename = itemId;
 
@@ -254,8 +256,10 @@ namespace JellyEmu.Controllers
                 name = c.Name,
                 needsThreads = c.NeedsThreads
             }));
-            var ext = !string.IsNullOrEmpty(item.Path) ? Path.GetExtension(item.Path) : ".zip";
-            var filename = !string.IsNullOrEmpty(item.Path) ? Path.GetFileNameWithoutExtension(item.Path) : itemId;
+            // A game in its own folder with a single ROM is served as that file, so name the URL after it.
+            var romFileForUrl = JellyEmuFileService.GetSingleRomFileInFolder(item.Path ?? string.Empty) ?? item.Path;
+            var ext = !string.IsNullOrEmpty(romFileForUrl) ? Path.GetExtension(romFileForUrl) : ".zip";
+            var filename = !string.IsNullOrEmpty(romFileForUrl) ? Path.GetFileNameWithoutExtension(romFileForUrl) : itemId;
             var cleanFilename = CleanCosmeticFilename(filename);
             if (string.IsNullOrWhiteSpace(cleanFilename))
             {

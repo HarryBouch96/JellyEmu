@@ -240,6 +240,42 @@ namespace JellyEmu.Services
             return itemPath;
         }
 
+        private static readonly HashSet<string> NonRomExtensions = new(StringComparer.OrdinalIgnoreCase)
+        {
+            ".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".nfo", ".txt", ".xml", ".pdf", ".md"
+        };
+
+        /// <summary>
+        /// For a game stored in its own folder (e.g. Games/PS1/Harry Potter/Harry Potter.chd),
+        /// returns the ROM file if the folder holds exactly one, ignoring artwork, metadata and
+        /// hidden files. Returns null for multi-file games (e.g. .cue + .bin), which are served as a ZIP.
+        /// </summary>
+        public static string? GetSingleRomFileInFolder(string folderPath)
+        {
+            if (string.IsNullOrWhiteSpace(folderPath) || !Directory.Exists(folderPath))
+            {
+                return null;
+            }
+
+            try
+            {
+                var candidates = Directory.GetFiles(folderPath, "*", SearchOption.AllDirectories)
+                    .Where(f => !Path.GetFileName(f).StartsWith('.'))
+                    .Where(f => !NonRomExtensions.Contains(Path.GetExtension(f)))
+                    .Take(2)
+                    .ToList();
+                return candidates.Count == 1 ? candidates[0] : null;
+            }
+            catch (IOException)
+            {
+                return null;
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return null;
+            }
+        }
+
         /// <summary>
         /// Resolves all physical files associated with a ROM item (expanding .j3u playlists and directory trees) that exist on disk.
         /// </summary>

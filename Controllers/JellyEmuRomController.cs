@@ -50,13 +50,23 @@ namespace JellyEmu.Controllers
                 return NotFound();
             }
 
+            string? romPath;
             if (Directory.Exists(item.Path))
             {
-                await DownloadZip(itemId).ConfigureAwait(false);
-                return new EmptyResult();
+                // A folder holding a single ROM is served as that file, like a ROM in the
+                // library root. Zipping it would make the browser hold the archive and the
+                // extracted game in memory at once, which exhausts memory on large disc images.
+                romPath = JellyEmuFileService.GetSingleRomFileInFolder(item.Path);
+                if (romPath == null)
+                {
+                    await DownloadZip(itemId).ConfigureAwait(false);
+                    return new EmptyResult();
+                }
             }
-
-            var romPath = _fileService.ResolveActiveRomPath(item.Path, userId, itemId);
+            else
+            {
+                romPath = _fileService.ResolveActiveRomPath(item.Path, userId, itemId);
+            }
             if (string.IsNullOrEmpty(romPath) || !System.IO.File.Exists(romPath))
             {
                 Logger.LogWarning("[JellyEmu] Rom: resolved path {Path} not found", romPath);

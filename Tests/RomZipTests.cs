@@ -192,5 +192,33 @@ namespace JellyEmu.Tests
                 JellyEmuRomController.BuildRomZipAsync(new[] { Path.Combine(gameDir, "gone.bin") }, gameDir, _tempDir, CancellationToken.None));
             Assert.Empty(Directory.GetFiles(_tempDir));
         }
+
+        [Fact]
+        public void GetSingleRomFileInFolder_SingleRomWithArtwork_ReturnsRom()
+        {
+            var chd = CreateFile(Path.Combine("Games", "PS1", "Harry Potter", "Harry Potter.chd"), Bytes(64, 20));
+            CreateFile(Path.Combine("Games", "PS1", "Harry Potter", "cover.jpg"), Bytes(16, 21));
+            CreateFile(Path.Combine("Games", "PS1", "Harry Potter", "game.nfo"), Bytes(16, 22));
+            CreateFile(Path.Combine("Games", "PS1", "Harry Potter", ".DS_Store"), Bytes(16, 23));
+
+            Assert.Equal(chd, JellyEmuFileService.GetSingleRomFileInFolder(Path.Combine(_root, "Games", "PS1", "Harry Potter")));
+        }
+
+        [Fact]
+        public void GetSingleRomFileInFolder_MultiFileGame_ReturnsNull()
+        {
+            CreateFile(Path.Combine("Games", "PS1", "Crash", "Crash.cue"), Bytes(16, 24));
+            CreateFile(Path.Combine("Games", "PS1", "Crash", "Crash.bin"), Bytes(64, 25));
+
+            Assert.Null(JellyEmuFileService.GetSingleRomFileInFolder(Path.Combine(_root, "Games", "PS1", "Crash")));
+        }
+
+        [Fact]
+        public void GetSingleRomFileInFolder_NotAFolder_ReturnsNull()
+        {
+            var rom = CreateFile(Path.Combine("Games", "GBA", "game.gba"), Bytes(16, 26));
+            Assert.Null(JellyEmuFileService.GetSingleRomFileInFolder(rom));
+            Assert.Null(JellyEmuFileService.GetSingleRomFileInFolder(Path.Combine(_root, "missing")));
+        }
     }
 }
