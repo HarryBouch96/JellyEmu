@@ -246,6 +246,17 @@ namespace JellyEmu.Services
         };
 
         /// <summary>
+        /// True for files that can be part of a game, i.e. not hidden and not artwork or metadata.
+        /// </summary>
+        public static bool IsRomLikeFile(string path)
+        {
+            var name = Path.GetFileName(path);
+            return !string.IsNullOrEmpty(name)
+                && !name.StartsWith('.')
+                && !NonRomExtensions.Contains(Path.GetExtension(name));
+        }
+
+        /// <summary>
         /// For a game stored in its own folder (e.g. Games/PS1/Harry Potter/Harry Potter.chd),
         /// returns the ROM file if the folder holds exactly one, ignoring artwork, metadata and
         /// hidden files. Returns null for multi-file games (e.g. .cue + .bin), which are served as a ZIP.
@@ -260,8 +271,7 @@ namespace JellyEmu.Services
             try
             {
                 var candidates = Directory.GetFiles(folderPath, "*", SearchOption.AllDirectories)
-                    .Where(f => !Path.GetFileName(f).StartsWith('.'))
-                    .Where(f => !NonRomExtensions.Contains(Path.GetExtension(f)))
+                    .Where(IsRomLikeFile)
                     .Take(2)
                     .ToList();
                 return candidates.Count == 1 ? candidates[0] : null;

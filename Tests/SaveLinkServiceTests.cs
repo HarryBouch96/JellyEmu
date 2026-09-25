@@ -1,0 +1,181 @@
+using System;
+using System.IO;
+using JellyEmu.Services;
+using Microsoft.Data.Sqlite;
+using Microsoft.Extensions.Logging.Abstractions;
+using Xunit;
+
+namespace JellyEmu.Tests
+{
+    public class SaveLinkServiceTests : IDisposable
+    {
+        private const string OldId = "76c7e4628a9c991c9d001274207ad051";
+        private const string NewId = "1231424c598ff304a72067d87f067c09";
+        private const string UserA = "c069e3aceb5e4290a08913215870004c";
+        private const string UserB = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+        private readonly string _root;
+        private readonly string _data;
+        private readonly JellyEmuSaveLinkService _service;
+
+        public SaveLinkServiceTests()
+        {
+            _root = Path.Combine(Path.GetTempPath(), "jellyemu-savelink-" + Guid.NewGuid().ToString("N"));
+            _data = Path.Combine(_root, "data");
+            Directory.CreateDirectory(_data);
+            var appPaths = new MockAppPaths(_data);
+            var fileService = new JellyEmuFileService(null!, appPaths, NullLogger<JellyEmuFileService>.Instance);
+            _service = new JellyEmuSaveLinkService(null, appPaths, fileService, null, NullLogger<JellyEmuSaveLinkService>.Instance);
+        }
+
+        public void Dispose()
+        {
+            SqliteConnection.ClearAllPools();
+            try { Directory.Delete(_root, true); } catch (IOException) { }
+        }
+
+        private string WriteFile(string relativePath, int size, byte fill = 1)
+        {
+            var path = Path.Combine(_root, relativePath);
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            var bytes = new byte[size];
+            Array.Fill(bytes, fill);
+            File.WriteAllBytes(path, bytes);
+            return path;
+        }
+
+        private string WriteSave(string userId, int slot, string fileName, byte fill)
+        {
+            return WriteFile(Path.Combine("data", "jellyemu-saves", userId, "slot" + slot, fileName), 64, fill);
+        }
+
+        [Fact]
+        public void Fingerprint_SameRom_MovedIntoOwnFolderWithArtwork_Matches()
+        {
+            var inRoot = WriteFile(Path.Combine("lib-before", "Harry Potter.chd"), 1000);
+            var folder = Path.Combine(_root, "lib-after", "Harry Potter");
+            WriteFile(Path.Combine("lib-after", "Harry Potter", "Harry Potter.chd"), 1000);
+            WriteFile(Path.Combine("lib-after", "Harry Potter", "cover.jpg"), 50);
+            WriteFile(Path.Combine("lib-after", "Harry Potter", ".DS_Store"), 10);
+
+            var before = _service.ComputeFingerprint(inRoot);
+            var after = _service.ComputeFingerprint(folder);
+
+            Assert.NotNull(before);
+            Assert.Equal(before, after);
+        }
+
+        [Fact]
+        public void Fingerprint_DifferentSizeOrName_DoesNotMatch()
+        {
+            var a = WriteFile(Path.Combine("a", "Pokemon - Sapphire.gba"), 1000);
+            var b = WriteFile(Path.Combine("b", "Pokemon - Sapphire.gba"), 1001);
+            var c = WriteFile(Path.Combine("c", "Pokemon - Ruby.gba"), 1000);
+
+            Assert.NotEqual(_service.ComputeFingerprint(a), _service.ComputeFingerprint(b));
+            Assert.NotEqual(_service.ComputeFingerprint(a), _service.ComputeFingerprint(c));
+        }
+
+        [Fact]
+        public void Fingerprint_NoRomFiles_IsNull()
+        {
+            WriteFile(Path.Combine("art-only", "cover.png"), 10);
+            Assert.Null(_service.ComputeFingerprint(Path.Combine(_root, "art-only")));
+            Assert.Null(_service.ComputeFingerprint(Path.Combine(_root, "missing.gba")));
+        }
+
+        [Fact]
+        public void FindOrphans_OnlyReturnsMissingItemsWithSameFingerprint()
+        {
+            _service.Remember(OldId, "fp1", "Harry Potter");
+            _service.Remember("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "fp1", "Harry Potter (copy still in library)");
+            _service.Remember("cccccccccccccccccccccccccccccccc", "fp2", "Other game");
+
+            var orphans = _service.FindOrphans(NewId, "fp1", id => id == "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+
+            Assert.Equal(new[] { OldId }, orphans);
+        }
+
+        [Fact]
+        public void MoveSaves_MovesAllFilesForAllUsers_AndNeverOverwrites()
+        {
+            WriteSave(UserA, 100, OldId + ".sav", 1);
+            WriteSave(UserA, 1, OldId + ".state", 2);
+            WriteSave(UserA, 1, OldId + ".screenshot.json", 3);
+            WriteSave(UserB, 100, OldId + ".sav", 4);
+            WriteSave(UserB, 100, NewId + ".sav", 9);            // already has one: must be kept
+            WriteSave(UserA, 100, "unrelatedunrelatedunrelatedunrel.sav", 5);
+
+            var moved = _service.MoveSaves(OldId, NewId);
+
+            var saves = Path.Combine(_data, "jellyemu-saves");
+            Assert.Equal(3, moved);
+            Assert.Equal(1, File.ReadAllBytes(Path.Combine(saves, UserA, "slot100", NewId + ".sav"))[0]);
+            Assert.True(File.Exists(Path.Combine(saves, UserA, "slot1", NewId + ".state")));
+            Assert.True(File.Exists(Path.Combine(saves, UserA, "slot1", NewId + ".screenshot.json")));
+            Assert.False(File.Exists(Path.Combine(saves, UserA, "slot100", OldId + ".sav")));
+            // Conflict: the new ID's save is untouched and the old one stays where it was.
+            Assert.Equal(9, File.ReadAllBytes(Path.Combine(saves, UserB, "slot100", NewId + ".sav"))[0]);
+            Assert.True(File.Exists(Path.Combine(saves, UserB, "slot100", OldId + ".sav")));
+            Assert.True(File.Exists(Path.Combine(saves, UserA, "slot100", "unrelatedunrelatedunrelatedunrel.sav")));
+        }
+
+        [Fact]
+        public void MoveSaves_MergesPlaytime()
+        {
+            var dbPath = Path.Combine(_data, "jellyemu-playtime.db");
+            using (var connection = new SqliteConnection($"Data Source={dbPath}"))
+            {
+                connection.Open();
+                using var cmd = connection.CreateCommand();
+                cmd.CommandText =
+                    @"CREATE TABLE Playtime (UserId TEXT NOT NULL, ItemId TEXT NOT NULL, Seconds INTEGER NOT NULL, PRIMARY KEY (UserId, ItemId));
+                      INSERT INTO Playtime VALUES ('" + UserA + "', '" + OldId + "', 600);" +
+                    "INSERT INTO Playtime VALUES ('" + UserA + "', '" + NewId + "', 60);" +
+                    "INSERT INTO Playtime VALUES ('" + UserB + "', '" + OldId + "', 30);";
+                cmd.ExecuteNonQuery();
+            }
+
+            _service.MoveSaves(OldId, NewId);
+
+            using var check = new SqliteConnection($"Data Source={dbPath}");
+            check.Open();
+            long Seconds(string user, string item)
+            {
+                using var q = check.CreateCommand();
+                q.CommandText = "SELECT COALESCE(SUM(Seconds), -1) FROM Playtime WHERE UserId = $u AND ItemId = $i";
+                q.Parameters.AddWithValue("$u", user);
+                q.Parameters.AddWithValue("$i", item);
+                var result = q.ExecuteScalar();
+                return result is long l ? l : -1;
+            }
+            Assert.Equal(660, Seconds(UserA, NewId));
+            Assert.Equal(30, Seconds(UserB, NewId));
+            Assert.Equal(-1, Seconds(UserA, OldId));
+        }
+
+        [Fact]
+        public void ItemIdsWithSaves_ListsItemsAcrossUsersAndSlots()
+        {
+            WriteSave(UserA, 100, OldId + ".sav", 1);
+            WriteSave(UserB, 2, NewId + ".screenshot.json", 1);
+
+            var ids = _service.ItemIdsWithSaves();
+
+            Assert.Contains(OldId, ids);
+            Assert.Contains(NewId, ids);
+            Assert.Equal(2, ids.Count);
+        }
+
+        [Fact]
+        public void Remember_PersistsAcrossInstances()
+        {
+            _service.Remember(OldId, "fp1", "Harry Potter");
+
+            var appPaths = new MockAppPaths(_data);
+            var reloaded = new JellyEmuSaveLinkService(null, appPaths, null, null, NullLogger<JellyEmuSaveLinkService>.Instance);
+
+            Assert.Equal(new[] { OldId }, reloaded.FindOrphans(NewId, "fp1", _ => false));
+        }
+    }
+}

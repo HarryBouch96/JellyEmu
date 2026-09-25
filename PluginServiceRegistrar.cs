@@ -49,6 +49,8 @@ namespace JellyEmu
             serviceCollection.AddMemoryCache();
             serviceCollection.AddSingleton<JellyEmuCacheService>();
             serviceCollection.AddSingleton<JellyEmuFileService>();
+            serviceCollection.AddSingleton<JellyEmuSaveLinkService>();
+            serviceCollection.AddHostedService<JellyEmuSaveLinkStartup>();
             serviceCollection.AddSingleton<ScreenScraperService>();
             serviceCollection.AddSingleton<JellyEmuNetplayService>();
             serviceCollection.AddHostedService(sp => sp.GetRequiredService<JellyEmuNetplayService>());

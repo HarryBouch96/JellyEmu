@@ -17,14 +17,20 @@ namespace JellyEmu.Controllers
     /// </summary>
     public class JellyEmuPlayController : JellyEmuBaseController
     {
+        private readonly JellyEmuSaveLinkService _saveLinks;
+
         public JellyEmuPlayController(
             ILibraryManager libraryManager,
             IApplicationPaths appPaths,
             ILogger<JellyEmuPlayController> logger,
             JellyEmuEjsManager ejsManager,
             JellyEmuSessionService sessionService,
-            IHttpClientFactory httpClientFactory)
-            : base(libraryManager, appPaths, logger, ejsManager, sessionService, httpClientFactory) { }
+            IHttpClientFactory httpClientFactory,
+            JellyEmuSaveLinkService saveLinks)
+            : base(libraryManager, appPaths, logger, ejsManager, sessionService, httpClientFactory)
+        {
+            _saveLinks = saveLinks;
+        }
 
         [HttpGet("/jellyemu/play/{itemId}")]
         public async Task<IActionResult> Play(string itemId, [FromQuery] string? userId, [FromQuery] int? slot, [FromQuery] string? core,
@@ -35,6 +41,9 @@ namespace JellyEmu.Controllers
 
             var item = LibraryManager.GetItemById(itemId);
             if (item == null) return NotFound();
+
+            // Reattach saves left behind if this game's file was moved or renamed.
+            _saveLinks.OnGameLaunch(item);
 
             var resolvedCore = ResolveCore(item, userId, core);
 
