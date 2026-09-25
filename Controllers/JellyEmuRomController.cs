@@ -9,6 +9,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
 using System.IO;
 using System.IO.Compression;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace JellyEmu.Controllers
@@ -100,25 +101,116 @@ namespace JellyEmu.Controllers
                 ? $"{Path.GetFileName(baseDir)}.zip"
                 : $"{Path.GetFileNameWithoutExtension(item.Path)}.zip";
 
-            Response.ContentType = "application/zip";
-            Response.Headers["Content-Disposition"] = $"attachment; filename=\"{Uri.EscapeDataString(zipName)}\"";
+            var cancellationToken = HttpContext.RequestAborted;
 
-            using (var archive = new ZipArchive(Response.Body, ZipArchiveMode.Create, true))
+            // HEAD only needs the headers; don't build a potentially multi-GB archive for it.
+            if (HttpMethods.IsHead(Request.Method))
             {
-                foreach (var filePath in filesToZip)
-                {
-                    var entryName = isDir
-                        ? Path.GetRelativePath(baseDir, filePath).Replace('\\', '/')
-                        : Path.GetFileName(filePath);
+                Response.ContentType = "application/zip";
+                Response.Headers["Content-Disposition"] = $"attachment; filename=\"{Uri.EscapeDataString(zipName)}\"";
+                return;
+            }
 
-                    var entry = archive.CreateEntry(entryName, CompressionLevel.Fastest);
-                    using (var entryStream = entry.Open())
-                    using (var fileStream = System.IO.File.OpenRead(filePath))
-                    {
-                        await fileStream.CopyToAsync(entryStream).ConfigureAwait(false);
-                    }
+            // ZipArchive finalises the archive with synchronous writes, which Kestrel
+            // rejects on Response.Body. Build the ZIP in a temp file (deleted on close),
+            // then stream it to the client asynchronously.
+            FileStream zipStream;
+            try
+            {
+                zipStream = await BuildRomZipAsync(filesToZip, item.Path, AppPaths.TempDirectory, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                Logger.LogDebug("[JellyEmu] ROM zip for {ItemId} cancelled by client", SanitizeForLog(itemId));
+                return;
+            }
+            catch (Exception ex)
+            {
+                Logger.LogError(ex, "[JellyEmu] Failed to build ROM zip for {ItemId}", SanitizeForLog(itemId));
+                Response.StatusCode = StatusCodes.Status500InternalServerError;
+                return;
+            }
+
+            await using (zipStream.ConfigureAwait(false))
+            {
+                Response.ContentType = "application/zip";
+                Response.ContentLength = zipStream.Length;
+                Response.Headers["Content-Disposition"] = $"attachment; filename=\"{Uri.EscapeDataString(zipName)}\"";
+
+                try
+                {
+                    await zipStream.CopyToAsync(Response.Body, cancellationToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    Logger.LogDebug("[JellyEmu] ROM zip download for {ItemId} aborted by client", SanitizeForLog(itemId));
                 }
             }
+        }
+
+        /// <summary>
+        /// Writes the given ROM files into a ZIP in a temporary file and returns it
+        /// opened and rewound. The file is deleted automatically when the stream is
+        /// disposed, and on failure or cancellation before it is returned.
+        /// Entries for directory items keep their path relative to the item folder;
+        /// single-file items use just the file name.
+        /// </summary>
+        internal static async Task<FileStream> BuildRomZipAsync(
+            IReadOnlyList<string> files,
+            string itemPath,
+            string tempDirectory,
+            CancellationToken cancellationToken)
+        {
+            Directory.CreateDirectory(tempDirectory);
+            var tempPath = Path.Combine(tempDirectory, $"jellyemu-rom-{Guid.NewGuid():N}.zip");
+            var zipStream = new FileStream(
+                tempPath,
+                FileMode.CreateNew,
+                FileAccess.ReadWrite,
+                FileShare.None,
+                bufferSize: 81920,
+                FileOptions.Asynchronous | FileOptions.DeleteOnClose);
+
+            try
+            {
+                using (var archive = new ZipArchive(zipStream, ZipArchiveMode.Create, leaveOpen: true))
+                {
+                    foreach (var filePath in files)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+
+                        var entry = archive.CreateEntry(GetRomZipEntryName(itemPath, filePath), CompressionLevel.Fastest);
+                        using (var entryStream = entry.Open())
+                        using (var fileStream = new FileStream(
+                            filePath, FileMode.Open, FileAccess.Read, FileShare.Read,
+                            bufferSize: 81920, FileOptions.Asynchronous | FileOptions.SequentialScan))
+                        {
+                            await fileStream.CopyToAsync(entryStream, cancellationToken).ConfigureAwait(false);
+                        }
+                    }
+                }
+
+                await zipStream.FlushAsync(cancellationToken).ConfigureAwait(false);
+                zipStream.Position = 0;
+                return zipStream;
+            }
+            catch
+            {
+                await zipStream.DisposeAsync().ConfigureAwait(false);
+                throw;
+            }
+        }
+
+        /// <summary>
+        /// ZIP entry name for a ROM file: the '/'-separated path relative to the item
+        /// folder for directory items, otherwise just the file name.
+        /// </summary>
+        internal static string GetRomZipEntryName(string itemPath, string filePath)
+        {
+            var baseDir = itemPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            return Directory.Exists(baseDir)
+                ? Path.GetRelativePath(baseDir, filePath).Replace('\\', '/')
+                : Path.GetFileName(filePath);
         }
 
         /// <summary>
