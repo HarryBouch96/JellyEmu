@@ -39,7 +39,8 @@
         { id: 27, label: 'FAST FORWARD', description: 'Toggle fast forward emulation' },
         { id: 28, label: 'REWIND', description: 'Rewind gameplay in real time' },
         { id: 29, label: 'SLOW MOTION', description: 'Toggle slow motion gameplay' },
-        { id: 30, label: 'EXIT GAME', description: 'Exit emulation and return to Jellyfin' }
+        { id: 30, label: 'EXIT GAME', description: 'Exit emulation and return to Jellyfin' },
+        { id: 31, label: 'OPEN MENU', description: 'Show the emulator menu, navigable with a controller' }
     ];
 
     // ==========================================
@@ -147,6 +148,7 @@
     var _jeActiveSlot = activeSlot;
 
     function _jeHotkeyAction(idx) {
+        if ((window._jeMenuOpen || window._jeMenuHold) && idx !== 31) return;
         switch (idx) {
             case 24: // Quick Save
                 var g = gm(); if (!g) return;
@@ -202,6 +204,9 @@
                 } else if (typeof window.jeExit === 'function') {
                     window.jeExit();
                 }
+                break;
+            case 31: // Open Menu
+                if (typeof window._jeToggleGamepadMenu === 'function') window._jeToggleGamepadMenu();
                 break;
         }
     }
@@ -410,8 +415,20 @@
 
     var _jeSimulatedState = {};
 
+    // Release every input currently held down in the game (used when the
+    // controller menu opens, so nothing stays pressed while paused).
+    window._jeReleaseAllInputs = function () {
+        Object.keys(_jeSimulatedState).forEach(function (k) {
+            if (_jeSimulatedState[k]) _jeSimulate(parseInt(k, 10), false);
+        });
+    };
+
     // - simulateInput bridge -
     function _jeSimulate(idx, pressed) {
+        // While the controller menu is open (and until every button is released
+        // after it closes), only its own toggle hotkey works and the game gets
+        // no new presses; releases still go through.
+        if ((window._jeMenuOpen || window._jeMenuHold) && pressed && idx !== 31) return;
         if (idx >= 24) { if (pressed) _jeHotkeyAction(idx); return; }
         var g = gm();
         if (!g) { console.warn('[JellyEmu Input] gm() is null'); return; }
@@ -511,6 +528,8 @@
     // Polls navigator.getGamepads() every animation frame.
     // Handles button mapping and emulation input directly with full logging.
     var _jeActiveGpListen = null; // { idx, field, bk, timeoutId, initialAxes }
+    // The controller menu stays out of the way while a button is being rebound.
+    window._jeGpListening = function () { return !!_jeActiveGpListen; };
     var _jeRawGpPrevButtons = {}; // padIndex -> { bi: bool }
     var _jeRawGpPrevAxes = {};    // padIndex -> { ai: val }
     var _jeGpActiveState = {};    // label -> bool (for simulation debounce)

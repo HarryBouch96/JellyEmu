@@ -191,12 +191,16 @@ namespace JellyEmu.Tests
         [InlineData("default")]
         [InlineData("PlayStation")]
         [InlineData("Nintendo DS")]
-        public void GetScheme_ExitGame_ShouldHaveControllerComboAndEscape(string platform)
+        public void GetScheme_OpenMenu_ShouldHaveControllerCombo(string platform)
         {
             var scheme = _inputService.GetScheme(platform);
 
-            Assert.Equal(27, scheme.DefaultBindings[30].Kb1); // Escape
-            Assert.Equal("LEFT_BOTTOM_SHOULDER+RIGHT_BOTTOM_SHOULDER+LEFT_STICK+RIGHT_STICK", scheme.DefaultBindings[30].Gp1);
+            Assert.Contains(scheme.Buttons, b => b.Id == 31 && b.Label == "OPEN MENU");
+            Assert.Equal("LEFT_BOTTOM_SHOULDER+RIGHT_BOTTOM_SHOULDER+LEFT_STICK+RIGHT_STICK", scheme.DefaultBindings[31].Gp1);
+
+            // Exit Game stays on Escape only; exiting by controller goes through the menu.
+            Assert.Equal(27, scheme.DefaultBindings[30].Kb1);
+            Assert.Equal(string.Empty, scheme.DefaultBindings[30].Gp1);
         }
 
         [Fact]

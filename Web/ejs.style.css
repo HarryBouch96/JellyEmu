@@ -1365,3 +1365,25 @@ canvas.ejs_canvas,
 .je-bar.je-hidden {
     display: none !important;
 }
+
+/* Controller menu (ejs.menu.js) */
+.je-gp-focus {
+    outline: 3px solid #00a4dc !important;
+    outline-offset: 2px;
+    box-shadow: 0 0 12px rgba(0, 164, 220, .6) !important;
+}
+
+#je-gp-hint {
+    position: fixed;
+    left: 50%;
+    bottom: 96px;
+    transform: translateX(-50%);
+    z-index: 95001; /* above popups (95000) */
+    padding: 6px 14px;
+    border-radius: 999px;
+    background: rgba(0, 0, 0, .75);
+    color: #fff;
+    font: 13px/1.4 system-ui, sans-serif;
+    white-space: nowrap;
+    pointer-events: none;
+}

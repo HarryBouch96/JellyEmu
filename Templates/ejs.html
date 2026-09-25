@@ -878,7 +878,7 @@
                 topbar.classList.remove('je-hidden');
                 dock.classList.remove('je-hidden');
                 clearTimeout(hideTimer);
-                if (!window._jePopupOpen) {
+                if (!window._jePopupOpen && !window._jeMenuOpen) {
                     hideTimer = setTimeout(function () {
                         topbar.classList.add('je-hidden');
                         dock.classList.add('je-hidden');
@@ -960,6 +960,7 @@
             }
             window._jeOpenPopup = openPopup;
             window._jeClosePopup = closePopup;
+            window._jeCloseAllPopups = closeAllPopups;
             // Close buttons
             document.querySelectorAll('[data-close]').forEach(function (btn) {
                 btn.addEventListener('click', function () { closePopup(btn.getAttribute('data-close')); });
@@ -1027,6 +1028,7 @@
                     if (gp) gp.focus();
                 }
             }
+            window._jeRefocusGame = refocusGame;
             window.addEventListener('click', function (e) {
                 if (window._jePopupOpen) return;
                 if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT')) return;
@@ -1490,6 +1492,10 @@
                     dockMinBtn.classList.remove('je-hidden');
                 }
             };
+
+            // Hooks for the controller menu (ejs.menu.js)
+            window._jeShowDocks = function () { showDocks(); };
+            window._jeExpandDock = function () { if (dockMinimized) dockMinBtn.click(); };
         })();
     </script>
     <script>
@@ -1844,6 +1850,7 @@
     </script>
 
     <script src="{{ base_url }}/jellyemu/assets/ejs.input.js?v={{ version }}"></script>
+    <script src="{{ base_url }}/jellyemu/assets/ejs.menu.js?v={{ version }}"></script>
     <script src="{{ base_url }}/jellyemu/assets/ejs.core.js?v={{ version }}"></script>
     <script src="{{ base_url }}/jellyemu/assets/ejs.save.js?v={{ version }}"></script>
     <script src="{{ base_url }}/jellyemu/assets/ejs.setting.js?v={{ version }}"></script>

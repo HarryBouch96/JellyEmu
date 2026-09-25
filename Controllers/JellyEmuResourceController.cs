@@ -108,6 +108,19 @@ namespace JellyEmu.Controllers
         }
 
         /// <summary>
+        /// Serves the controller menu embedded JS resource.
+        /// Path: GET /jellyemu/assets/ejs.menu.js
+        /// </summary>
+        [HttpGet("/jellyemu/assets/ejs.menu.js")]
+        [Produces("application/javascript")]
+        [ProducesResponseType(StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status404NotFound)]
+        public IActionResult MenuJs()
+        {
+            return ServeEmbeddedJs("ejs.menu.js");
+        }
+
+        /// <summary>
         /// Serves the settings embedded JS resource.
         /// Path: GET /jellyemu/assets/ejs.setting.js
         /// </summary>

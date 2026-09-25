@@ -38,7 +38,8 @@ namespace JellyEmu.Services
             new() { Id = 27, Label = "FAST FORWARD", Description = "Toggle fast forward emulation" },
             new() { Id = 28, Label = "REWIND", Description = "Rewind gameplay in real time" },
             new() { Id = 29, Label = "SLOW MOTION", Description = "Toggle slow motion gameplay" },
-            new() { Id = 30, Label = "EXIT GAME", Description = "Exit emulation and return to Jellyfin" }
+            new() { Id = 30, Label = "EXIT GAME", Description = "Exit emulation and return to Jellyfin" },
+            new() { Id = 31, Label = "OPEN MENU", Description = "Show the emulator menu, navigable with a controller" }
         };
 
         private static readonly Dictionary<int, InputBindingDefault> BaseDefaultBindings = new()
@@ -73,8 +74,9 @@ namespace JellyEmu.Services
             { 27, new() { Kb1 = 107, Kb2 = 0, Gp1 = "",                      Gp2 = "" } },
             { 28, new() { Kb1 = 32,  Kb2 = 0, Gp1 = "",                      Gp2 = "" } },
             { 29, new() { Kb1 = 109, Kb2 = 0, Gp1 = "",                      Gp2 = "" } },
-            // LT+RT+L3+R3: a controller-only way out, e.g. on the Xbox app where B cannot exit.
-            { 30, new() { Kb1 = 27,  Kb2 = 0, Gp1 = "LEFT_BOTTOM_SHOULDER+RIGHT_BOTTOM_SHOULDER+LEFT_STICK+RIGHT_STICK", Gp2 = "" } }
+            { 30, new() { Kb1 = 27,  Kb2 = 0, Gp1 = "",                      Gp2 = "" } },
+            // LT+RT+L3+R3: opens the controller-navigable menu (save, exit, settings...), e.g. on the Xbox app.
+            { 31, new() { Kb1 = 0,   Kb2 = 0, Gp1 = "LEFT_BOTTOM_SHOULDER+RIGHT_BOTTOM_SHOULDER+LEFT_STICK+RIGHT_STICK", Gp2 = "" } }
         };
 
         private static readonly Dictionary<string, Dictionary<int, InputBindingDefault>> SchemeDefaultOverrides =
