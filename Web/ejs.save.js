@@ -542,4 +542,224 @@
         });
     }
 
+    // Automatic SRAM (battery save) sync
+    //
+    // Keeps native in-game saves on the server so they survive between
+    // sessions on clients with unreliable browser storage (e.g. Xbox).
+    // Uses the existing /jellyemu/sram endpoints with a dedicated slot that
+    // is never shown in the manual Backup/Restore UI (slots 1-5) and does
+    // not collide with the multi-disc hand-off slot (99).
+    //
+    // Change detection uses EmulatorJS's documented EJS_onSaveUpdate +
+    // EJS_fixedSaveInterval (EmulatorJS >= 4.3). Older builds (the "stable"
+    // 4.2.x CDN channel) lack both, so we fall back to flushing and reading
+    // the save file ourselves on the same interval.
+    var AUTO_SRAM_SLOT = 100;
+    var AUTO_SRAM_INTERVAL_MS = 7000;
+    var AUTO_SRAM_RETRY_MS = 15000;
+    var AUTO_SRAM_RESTORE_TIMEOUT_MS = 10000;
+
+    if (itemId && userId && token) {
+        var autoSramUrl = '/jellyemu/sram/' + itemId + '/' + userId + '?slot=' + AUTO_SRAM_SLOT;
+        var autoSramReady = false;       // true once the launch-time restore check is finished
+        var autoSramStarted = false;     // guards against handling game start twice
+        var autoSramUploaded = null;     // hash of the SRAM the server is known to have
+        var autoSramInFlight = null;     // hash currently being uploaded
+        var autoSramPending = null;      // newest bytes waiting to be uploaded
+        var autoSramRetryTimer = null;
+
+        var toBytes = function (data) {
+            if (!data) return null;
+            if (data instanceof Uint8Array) return data;
+            if (data instanceof ArrayBuffer) return new Uint8Array(data);
+            if (ArrayBuffer.isView(data)) return new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+            return null;
+        };
+
+        // FNV-1a over the bytes plus the length; only used to detect changes.
+        var hashBytes = function (bytes) {
+            var h = 0x811c9dc5;
+            for (var i = 0; i < bytes.length; i++) {
+                h ^= bytes[i];
+                h = Math.imul(h, 0x01000193);
+            }
+            return (h >>> 0).toString(16) + ':' + bytes.length;
+        };
+
+        var readLocalSram = function (flush) {
+            try {
+                var g = gm();
+                if (!g || typeof g.getSaveFile !== 'function') return null;
+                return toBytes(g.getSaveFile(flush));
+            } catch (err) {
+                return null;
+            }
+        };
+
+        var autoSramChain = null;        // promise for the upload currently running
+
+        var uploadAutoSram = function () {
+            if (autoSramChain) return autoSramChain;
+            if (!autoSramReady || !autoSramPending) return Promise.resolve();
+            var bytes = autoSramPending;
+            var hash = hashBytes(bytes);
+            autoSramPending = null;
+            if (hash === autoSramUploaded) return Promise.resolve();
+
+            var failed = false;
+            autoSramInFlight = hash;
+            autoSramChain = jeFetch(autoSramUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/octet-stream' },
+                body: bytes
+            }).then(function (r) {
+                if (!r.ok) throw new Error('HTTP ' + r.status);
+                autoSramUploaded = hash;
+                console.log('[JellyEmu] Auto SRAM synced (' + bytes.length + ' bytes)');
+            }).catch(function (err) {
+                failed = true;
+                console.warn('[JellyEmu] Auto SRAM sync failed, will retry:', err);
+                if (!autoSramPending) autoSramPending = bytes;
+                clearTimeout(autoSramRetryTimer);
+                autoSramRetryTimer = setTimeout(uploadAutoSram, AUTO_SRAM_RETRY_MS);
+            }).then(function () {
+                autoSramInFlight = null;
+                autoSramChain = null;
+                // Newer data arrived while uploading; send it now (retries wait for the timer).
+                if (!failed && autoSramPending) return uploadAutoSram();
+            });
+            return autoSramChain;
+        };
+
+        var queueAutoSram = function (data) {
+            var bytes = toBytes(data);
+            if (!bytes || bytes.length < 8) return Promise.resolve();
+            var hash = hashBytes(bytes);
+            if (hash === autoSramUploaded) return Promise.resolve();
+            if (hash === autoSramInFlight) return autoSramChain || Promise.resolve();
+            autoSramPending = bytes;
+            return uploadAutoSram();
+        };
+
+        // Documented EmulatorJS hooks; must be defined before loader.js runs.
+        window.EJS_onSaveUpdate = function (e) {
+            if (!autoSramReady || !e) return;
+            queueAutoSram(e.save);
+        };
+        if (typeof window.EJS_fixedSaveInterval === 'undefined') {
+            window.EJS_fixedSaveInterval = AUTO_SRAM_INTERVAL_MS;
+        }
+
+        // useLocalBaseline: treat the SRAM currently in the emulator as already
+        // on the server, so it is only uploaded once the game changes it. Used
+        // when we could not confirm the server copy, to avoid overwriting a
+        // newer server save with stale local data.
+        var finishAutoSramRestore = function (useLocalBaseline) {
+            if (autoSramReady) return;
+            if (useLocalBaseline) {
+                var local = readLocalSram(false);
+                if (local) autoSramUploaded = hashBytes(local);
+            }
+            autoSramReady = true;
+
+            var e = window.EJS_emulator;
+            var hasSaveUpdate = e && typeof e.enableSaveUpdateEvent === 'function';
+            if (!hasSaveUpdate) {
+                // EmulatorJS < 4.3: no saveUpdate event or fixed interval.
+                setInterval(function () {
+                    var em = window.EJS_emulator;
+                    if (!em || !em.started) return;
+                    queueAutoSram(readLocalSram(true));
+                }, AUTO_SRAM_INTERVAL_MS);
+            }
+        };
+
+        // Launch-time restore: runs once per page load, never re-triggers itself.
+        var restoreAutoSram = function () {
+            if (autoSramStarted) return;
+            autoSramStarted = true;
+
+            // A save state is being loaded at launch; it carries its own SRAM
+            // and a restart would discard it. Just start tracking changes.
+            if (window.EJS_loadStateURL) {
+                setTimeout(function () { finishAutoSramRestore(true); }, 3000);
+                return;
+            }
+
+            var controller = (typeof AbortController === 'function') ? new AbortController() : null;
+            var abortTimer = controller ? setTimeout(function () { controller.abort(); }, AUTO_SRAM_RESTORE_TIMEOUT_MS) : null;
+
+            var skipForDiscSwap = isM3u
+                ? jeFetch('/jellyemu/sram/' + itemId + '/' + userId + '?slot=99', { method: 'HEAD' })
+                    .then(function (r) { return r.ok; }, function () { return false; })
+                : Promise.resolve(false);
+
+            var discSwap = false;
+            skipForDiscSwap.then(function (skip) {
+                // The multi-disc hand-off (slot 99) owns this launch; start
+                // tracking once its own restore/restart has had time to run.
+                if (skip) { discSwap = true; return null; }
+                return jeFetch(autoSramUrl, controller ? { signal: controller.signal } : undefined)
+                    .then(function (r) {
+                        if (r.status === 404) return null;
+                        if (!r.ok) throw new Error('HTTP ' + r.status);
+                        return r.arrayBuffer();
+                    });
+            }).then(function (buf) {
+                if (discSwap) {
+                    setTimeout(function () { finishAutoSramRestore(false); }, 5000);
+                    return;
+                }
+                // Nothing on the server yet: upload the current save on the first flush.
+                if (!buf || buf.byteLength < 8) {
+                    finishAutoSramRestore(false);
+                    return;
+                }
+                var serverBytes = new Uint8Array(buf);
+                var serverHash = hashBytes(serverBytes);
+                autoSramUploaded = serverHash;
+
+                var local = readLocalSram(false);
+                if (local && hashBytes(local) === serverHash) {
+                    finishAutoSramRestore(false);
+                    return;
+                }
+
+                var g = gm();
+                var sramPath = g && g.getSaveFilePath ? g.getSaveFilePath() : '';
+                if (!sramPath) {
+                    finishAutoSramRestore(true);
+                    return;
+                }
+                try { g.FS.unlink(sramPath); } catch (_) {}
+                g.FS.writeFile(sramPath, serverBytes);
+                g.loadSaveFiles();
+                g.restart();
+                console.log('[JellyEmu] Restored automatic SRAM backup (' + serverBytes.length + ' bytes)');
+                finishAutoSramRestore(false);
+            }).catch(function (err) {
+                console.warn('[JellyEmu] Automatic SRAM restore skipped:', err);
+                finishAutoSramRestore(true);
+            }).then(function () {
+                if (abortTimer) clearTimeout(abortTimer);
+            });
+        };
+
+        window.addEventListener('jellyemu:gamestart', function () {
+            setTimeout(restoreAutoSram, 300);
+        });
+
+        // Final flush on exit / backgrounding. Resolves within a few seconds
+        // even if the server is unreachable so it never blocks leaving the game.
+        window._jeFlushAutoSram = function () {
+            if (!autoSramReady) return Promise.resolve();
+            var done = queueAutoSram(readLocalSram(true));
+            var timeout = new Promise(function (resolve) { setTimeout(resolve, 4000); });
+            return Promise.race([done, timeout]).catch(function () {});
+        };
+        document.addEventListener('visibilitychange', function () {
+            if (document.visibilityState === 'hidden') window._jeFlushAutoSram();
+        });
+    }
+
 })();

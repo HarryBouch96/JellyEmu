@@ -1809,8 +1809,13 @@
                 }
             }
 
+            // Push any unsynced in-game (SRAM) save before leaving
+            var sramFlush = (typeof window._jeFlushAutoSram === 'function')
+                ? window._jeFlushAutoSram()
+                : Promise.resolve();
+
             function _fallbackClose() {
-                Promise.all([sessionStop, playtimeFlush]).finally(function () {
+                Promise.all([sessionStop, playtimeFlush, sramFlush]).finally(function () {
                     try { window.parent.postMessage({ type: 'jellyemu-session-end', itemId: '{{ item_id }}', seconds: sessionSeconds }, '*'); } catch (_) { }
                     closeIframe();
                 });
