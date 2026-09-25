@@ -7,6 +7,15 @@
     "owner": "HarryBouch96",
     "category": "General",
     "imageUrl": "https://raw.githubusercontent.com/HarryBouch96/JellyEmu/main/assets/jellyemu.png",
-    "versions": []
+    "versions": [
+      {
+        "version": "0.9.3.0",
+        "changelog": "- feat: publish releases through a Jellyfin plugin repository\n- fix: serve single-ROM game folders as the ROM file, not a ZIP\n- fix: serve ROM folders as ZIP without synchronous response writes\n- fix: automatically persist native SRAM saves\n- fix: avoid WebGL flicker from UI backdrop compositing\n- Fixes\n- Fixes\n- Core Options\n- PS2\n- Fixes\n- Version\n- Changes\n- Expand\n- Changes\n- Changes\n- Changes\n- Update README to simplify plugin description\n- Update README.md\n- Remove platform folder names and tokens table from README\n- Remove JellyEmu Plugin Setup Guide from README\n",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://github.com/HarryBouch96/JellyEmu/releases/download/v0.9.3.0/JellyEmu_0.9.3.0.zip",
+        "checksum": "5adedf0713ee457486a33a85065af5a9",
+        "timestamp": "2026-09-25T22:13:25Z"
+      }
+    ]
   }
 ]
