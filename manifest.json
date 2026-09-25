@@ -1,9 +1,9 @@
 ﻿{
     "id":  "9bab105e-9af0-4e25-a87d-876713b60962",
-    "version":  "0.9.2.3",
+    "version":  "0.9.3.0",
     "entryAssembly":  "JellyEmu.dll",
     "entryType":  "JellyEmu.Plugin",
-    "updateFeedUrl":  "https://raw.githubusercontent.com/Jellyfin-PG/JellyEmu/main/manifest.json",
+    "updateFeedUrl":  "https://raw.githubusercontent.com/HarryBouch96/JellyEmu/main/repository.json",
     "checkIntervalSeconds":  86400,
     "minHostVersion":  "1.0.0"
 }

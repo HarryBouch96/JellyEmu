@@ -24,7 +24,7 @@ namespace JellyEmu.Providers
             var client = HttpClientFactory.CreateClient();
             if (!client.DefaultRequestHeaders.Contains("User-Agent"))
             {
-                client.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", $"{JellyEmuVersion.UserAgent} (https://github.com/Jellyfin-PG/JellyEmu)");
+                client.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", $"{JellyEmuVersion.UserAgent} (https://github.com/HarryBouch96/JellyEmu)");
             }
             return client;
         }

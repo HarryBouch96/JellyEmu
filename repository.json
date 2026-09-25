@@ -1,0 +1,12 @@
+[
+  {
+    "guid": "9bab105e-9af0-4e25-a87d-876713b60962",
+    "name": "JellyEmu",
+    "description": "JellyEmu - Adding gaming support to jellyfin.",
+    "overview": "Import, manage, play and share your games with users.",
+    "owner": "HarryBouch96",
+    "category": "General",
+    "imageUrl": "https://raw.githubusercontent.com/HarryBouch96/JellyEmu/main/assets/jellyemu.png",
+    "versions": []
+  }
+]

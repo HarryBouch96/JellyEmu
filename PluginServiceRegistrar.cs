@@ -12,7 +12,7 @@ namespace JellyEmu
             serviceCollection.AddHttpClient("JellyEmuEjs", client =>
             {
                 client.DefaultRequestHeaders.UserAgent.ParseAdd(
-                    $"{JellyEmuVersion.UserAgent} (Jellyfin plugin; +https://github.com/Jellyfin-PG/JellyEmu)");
+                    $"{JellyEmuVersion.UserAgent} (Jellyfin plugin; +https://github.com/HarryBouch96/JellyEmu)");
                 client.Timeout = TimeSpan.FromMinutes(10);
             });
 

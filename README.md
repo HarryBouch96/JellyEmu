@@ -5,6 +5,18 @@
   <p><sub>Now with Romm integration, pico-8, VR/AR, <a href="https://github.com/Jellyfin-PG/JellyEmu-HomeAssistant-Plugin">HomeAssistant</a>, RetroArch, NetPlay, and <a href="https://github.com/Jellyfin-PG/JellyEmu-Playnite">Playnite</a> support.</sub></p>
 </div>
 
+> [!NOTE]
+> This is a maintained fork of [Jellyfin-PG/JellyEmu](https://github.com/Jellyfin-PG/JellyEmu).
+> To install it, go to **Dashboard → Plugins → Repositories** in Jellyfin, add
+> `https://raw.githubusercontent.com/HarryBouch96/JellyEmu/main/repository.json`,
+> and remove the upstream JellyEmu repository so the two don't compete for updates.
+
+## Releasing
+
+1. Bump `<Version>`, `<AssemblyVersion>` and `<FileVersion>` in `JellyEmu.csproj`.
+2. Commit, then tag and push: `git tag v<version> && git push origin main v<version>`.
+3. The **Build & Release** workflow builds the zip, publishes a GitHub Release, and adds the version to `repository.json`, so Jellyfin picks it up automatically.
+
 <p align="center">
   <a href="https://github.com/Jellyfin-PG/JellyEmu/actions">
     <img src="https://img.shields.io/github/actions/workflow/status/Jellyfin-PG/JellyEmu/release.yml" />

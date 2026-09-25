@@ -22,6 +22,18 @@ jobs:
         with:
           dotnet-version: '9.0.x'
 
+      - name: Get version from csproj
+        id: version
+        run: |
+          VERSION=$(sed -n 's/.*<Version>\(.*\)<\/Version>.*/\1/p' JellyEmu.csproj | xargs)
+          TARGET_ABI=$(sed -n 's/.*Include="Jellyfin.Controller" Version="\([^"]*\)".*/\1/p' JellyEmu.csproj | xargs).0
+          if [ "v${VERSION}" != "${{ github.ref_name }}" ]; then
+            echo "::error::Tag ${{ github.ref_name }} does not match csproj version ${VERSION}"
+            exit 1
+          fi
+          echo "VERSION=${VERSION}" >> $GITHUB_OUTPUT
+          echo "TARGET_ABI=${TARGET_ABI}" >> $GITHUB_OUTPUT
+
       - name: Restore dependencies
         run: dotnet restore
 
@@ -33,12 +45,6 @@ jobs:
 
       - name: Publish
         run: dotnet publish --configuration Release --no-build --output ./publish
-
-      - name: Get version from csproj
-        id: version
-        run: |
-          VERSION=$(sed -n 's/.*<Version>\(.*\)<\/Version>.*/\1/p' JellyEmu.csproj | xargs)
-          echo "VERSION=${VERSION}" >> $GITHUB_OUTPUT
 
       - name: Zip release artifacts
         run: |
@@ -62,11 +68,13 @@ jobs:
       - name: Generate changelog
         id: changelog
         run: |
+          # Skip merges and the bot commits that update the plugin catalog.
           if [ -n "${{ steps.previoustag.outputs.PREV }}" ]; then
-            LOG=$(git log ${{ steps.previoustag.outputs.PREV }}..${{ github.ref_name }} --pretty=format:"- %s" --no-merges)
+            LOG=$(git log ${{ steps.previoustag.outputs.PREV }}..${{ github.ref_name }} --pretty=format:"- %s" --no-merges --invert-grep --grep="update plugin catalog")
           else
-            LOG=$(git log --pretty=format:"- %s" --no-merges)
+            LOG=$(git log -n 20 --pretty=format:"- %s" --no-merges --invert-grep --grep="update plugin catalog")
           fi
+          printf '%s\n' "$LOG" > changelog.md
           echo "LOG<<EOF" >> $GITHUB_OUTPUT
           echo "$LOG" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
@@ -79,11 +87,41 @@ jobs:
           body: |
             ## JellyEmu v${{ steps.version.outputs.VERSION }}
 
+            ${{ steps.changelog.outputs.LOG }}
+
             ### Installation
-            Download `JellyEmu_${{ steps.version.outputs.VERSION }}.zip`, extract, and copy both DLLs to your Jellyfin plugins folder.
+            In Jellyfin, go to Dashboard → Plugins → Repositories and add:
+            `https://raw.githubusercontent.com/${{ github.repository }}/main/repository.json`
+
+            Or download `JellyEmu_${{ steps.version.outputs.VERSION }}.zip`, extract, and copy both DLLs to your Jellyfin plugins folder.
 
             **MD5:** `${{ steps.checksum.outputs.MD5 }}`
             **SHA256:** `${{ steps.checksum.outputs.SHA256 }}`
-
-            Update these values in `manifest.json` and `catalog.json` for the plugin repositories.
           files: JellyEmu_${{ steps.version.outputs.VERSION }}.zip
+
+      - name: Update plugin catalog
+        env:
+          VERSION: ${{ steps.version.outputs.VERSION }}
+          TARGET_ABI: ${{ steps.version.outputs.TARGET_ABI }}
+          CHECKSUM: ${{ steps.checksum.outputs.MD5 }}
+          SOURCE_URL: https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/JellyEmu_${{ steps.version.outputs.VERSION }}.zip
+        run: |
+          git fetch origin main
+          git checkout -B main origin/main
+          TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          # Newest version first; replace any existing entry for this version (re-runs).
+          jq --arg version "$VERSION" \
+             --arg targetAbi "$TARGET_ABI" \
+             --arg checksum "$CHECKSUM" \
+             --arg sourceUrl "$SOURCE_URL" \
+             --arg timestamp "$TIMESTAMP" \
+             --rawfile changelog changelog.md \
+             '.[0].versions = ([{version: $version, changelog: $changelog, targetAbi: $targetAbi, sourceUrl: $sourceUrl, checksum: $checksum, timestamp: $timestamp}]
+               + [.[0].versions[] | select(.version != $version)])' \
+             repository.json > repository.json.tmp
+          mv repository.json.tmp repository.json
+          git config user.name "github-actions[bot]"
+          git config user.email "41898299+github-actions[bot]@users.noreply.github.com"
+          git add repository.json
+          git commit -m "chore: update plugin catalog for v${VERSION}"
+          git push origin main
