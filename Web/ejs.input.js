@@ -463,9 +463,26 @@
     var _jeKbDown = {};
     var _popupOpen = function () { return !!window._jePopupOpen; };
 
+    // Some hosts (e.g. the Jellyfin Xbox app's WebView2) send a fake key
+    // event for every controller button alongside the real gamepad input.
+    // They report key "Unidentified", and the B button arrives as keyCode 27
+    // (Escape), which would trigger the Exit Game hotkey. The gamepad poller
+    // already handles these buttons, so ignore the key events. Real keyboard
+    // keys always report an identified key.
+    function _jeIsGamepadKeyEvent(ev) {
+        if (ev.key !== 'Unidentified') return false;
+        var pads = [];
+        try { pads = navigator.getGamepads ? navigator.getGamepads() : []; } catch (e) {}
+        for (var i = 0; i < pads.length; i++) {
+            if (pads[i]) return true;
+        }
+        return false;
+    }
+
     document.addEventListener('keydown', function (ev) {
         if (ev.target && (ev.target.tagName === 'INPUT' || ev.target.tagName === 'TEXTAREA' || ev.target.tagName === 'SELECT')) return;
         if (_popupOpen()) return;
+        if (_jeIsGamepadKeyEvent(ev)) return;
         var kc = ev.keyCode;
         if (_jeKbDown[kc]) return;
         _jeKbDown[kc] = true;
@@ -480,6 +497,7 @@
     }, true);
 
     document.addEventListener('keyup', function (ev) {
+        if (_jeIsGamepadKeyEvent(ev)) return;
         var kc = ev.keyCode;
         _jeKbDown[kc] = false;
         for (var idx in _jeBindings) {
@@ -1082,6 +1100,7 @@
         bk.classList.add('je-listening');
         bk.textContent = 'Press key…';
         function onKey(ev) {
+            if (_jeIsGamepadKeyEvent(ev)) return; // keep listening for a real key
             ev.preventDefault(); ev.stopPropagation();
             document.removeEventListener('keydown', onKey, true);
             bk.classList.remove('je-listening');

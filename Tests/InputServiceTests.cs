@@ -187,6 +187,18 @@ namespace JellyEmu.Tests
             }
         }
 
+        [Theory]
+        [InlineData("default")]
+        [InlineData("PlayStation")]
+        [InlineData("Nintendo DS")]
+        public void GetScheme_ExitGame_ShouldHaveControllerComboAndEscape(string platform)
+        {
+            var scheme = _inputService.GetScheme(platform);
+
+            Assert.Equal(27, scheme.DefaultBindings[30].Kb1); // Escape
+            Assert.Equal("LEFT_BOTTOM_SHOULDER+RIGHT_BOTTOM_SHOULDER+LEFT_STICK+RIGHT_STICK", scheme.DefaultBindings[30].Gp1);
+        }
+
         [Fact]
         public void GetAllSchemes_ShouldReturnAllSupportedSystems()
         {
