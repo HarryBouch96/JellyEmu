@@ -1352,3 +1352,16 @@ canvas.ejs_canvas,
     background: rgba(255, 255, 255, 0.4);
 }
 
+
+/* Xbox/WebView2: backdrop-filter layers composited over the EmulatorJS WebGL
+   canvas cause intermittent black flicker. Disable them on the emulator UI. */
+#je-topbar,#je-dock,#je-dock-min,.je-overlay,.je-popup {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+}
+
+/* Remove auto-hidden bars from the rendering/compositing tree entirely
+   instead of leaving transparent layers over the canvas. */
+.je-bar.je-hidden {
+    display: none !important;
+}
