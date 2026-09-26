@@ -51,7 +51,7 @@ namespace JellyEmu.Controllers
             {
                 "pico8" => PlayPico8(itemId),
                 // EXPERIMENT (experiment/game-streaming): PS2 streams from the gaming laptop.
-                "play"  => StreamTest(),
+                "play"  => StreamTest(itemId),
                 _       => await PlayEjs(itemId, userId, slot, core, httpClientFactory)
             };
         }
@@ -62,7 +62,7 @@ namespace JellyEmu.Controllers
         /// stream URL is read from {DataPath}/jellyemu-stream-test.url. Logs diagnostics to the
         /// Jellyfin client log. LT+RT+L3+R3 goes back to Jellyfin.
         /// </summary>
-        private ContentResult StreamTest()
+        private ContentResult StreamTest(string itemId)
         {
             var urlFile = Path.Combine(AppPaths.DataPath, "jellyemu-stream-test.url");
             var streamUrl = System.IO.File.Exists(urlFile) ? System.IO.File.ReadAllText(urlFile).Trim() : string.Empty;
@@ -91,6 +91,7 @@ namespace JellyEmu.Controllers
                 <script>
                 (function () {
                   var url = "{{js.Encode(streamUrl)}}";
+                  var exitUrl = "{{js.Encode(baseUrl + "/web/#/details?id=" + itemId)}}";
                   var t0 = Date.now(), lines = [], unsent = [], dbg = document.getElementById('dbg'), f = document.getElementById('f');
                   function log(m) {
                     var l = ((Date.now() - t0) / 1000).toFixed(1) + 's ' + m;
@@ -127,9 +128,12 @@ namespace JellyEmu.Controllers
                       var gp = pads[i]; if (!gp) continue;
                       if (!seen) { seen = true; log('top frame sees gamepad: ' + gp.id); }
                       if (!exiting && pressed(gp, 6) && pressed(gp, 7) && pressed(gp, 10) && pressed(gp, 11)) {
+                        // Leave without history.back(): the iframe's own navigations share the
+                        // tab history, so "back" would only step the iframe (e.g. to its login page).
                         exiting = true; log('exit combo'); flush();
-                        f.src = 'about:blank';
-                        setTimeout(function () { history.length > 1 ? history.back() : (location.href = '{{baseUrl}}/web/'); }, 300);
+                        if (f.parentNode) f.parentNode.removeChild(f);
+                        location.replace(exitUrl);
+                        setTimeout(function () { exiting = false; }, 3000); // allow a retry if navigation failed
                       }
                     }
                     requestAnimationFrame(poll);
