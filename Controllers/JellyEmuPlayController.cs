@@ -50,9 +50,98 @@ namespace JellyEmu.Controllers
             return resolvedCore switch
             {
                 "pico8" => PlayPico8(itemId),
-                "play"  => await PlayPlay(itemId, userId, slot),
+                // EXPERIMENT (experiment/game-streaming): PS2 streams from the gaming laptop.
+                "play"  => StreamTest(),
                 _       => await PlayEjs(itemId, userId, slot, core, httpClientFactory)
             };
+        }
+
+        /// <summary>
+        /// EXPERIMENT: full-screen page embedding a moonlight-web-stream session (Sunshine on the
+        /// gaming laptop, bridged to WebRTC) to test streaming inside the Jellyfin Xbox app. The
+        /// stream URL is read from {DataPath}/jellyemu-stream-test.url. Logs diagnostics to the
+        /// Jellyfin client log. LT+RT+L3+R3 goes back to Jellyfin.
+        /// </summary>
+        private ContentResult StreamTest()
+        {
+            var urlFile = Path.Combine(AppPaths.DataPath, "jellyemu-stream-test.url");
+            var streamUrl = System.IO.File.Exists(urlFile) ? System.IO.File.ReadAllText(urlFile).Trim() : string.Empty;
+            var baseUrl = ToAppUrl(string.Empty).TrimEnd('/');
+            var js = JavaScriptEncoder.Default;
+
+            var html = $$"""
+                <!DOCTYPE html>
+                <html>
+                <head>
+                <meta charset="utf-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <title>Streaming</title>
+                <script src="{{baseUrl}}/jellyemu/assets/jellyemu.utils.js"></script>
+                <style>
+                  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+                  iframe { border: 0; width: 100%; height: 100%; display: block; }
+                  #dbg { position: fixed; top: 6px; left: 6px; z-index: 9; max-width: 60vw; color: #7CFC00;
+                         font: 13px/1.35 monospace; background: rgba(0,0,0,.7); padding: 4px 8px;
+                         white-space: pre-wrap; pointer-events: none; border-radius: 4px; }
+                </style>
+                </head>
+                <body>
+                <iframe id="f" allow="gamepad *; autoplay *; fullscreen *; keyboard-map *; clipboard-read *; clipboard-write *" allowfullscreen></iframe>
+                <div id="dbg"></div>
+                <script>
+                (function () {
+                  var url = "{{js.Encode(streamUrl)}}";
+                  var t0 = Date.now(), lines = [], unsent = [], dbg = document.getElementById('dbg'), f = document.getElementById('f');
+                  function log(m) {
+                    var l = ((Date.now() - t0) / 1000).toFixed(1) + 's ' + m;
+                    lines.push(l); unsent.push(l);
+                    dbg.textContent = 'JellyEmu stream test - LT+RT+L3+R3 to exit\n' + lines.slice(-12).join('\n');
+                  }
+                  function flush() {
+                    if (!unsent.length || !window.JellyEmu) return;
+                    var token = JellyEmu.getAuthToken(); if (!token) return;
+                    var body = unsent.join('\n'); unsent = [];
+                    fetch(JellyEmu.getUrl('/ClientLog/Document'), { method: 'POST', keepalive: true, body: body,
+                      headers: { 'Content-Type': 'text/plain', 'Authorization': 'MediaBrowser Client="JellyEmu-StreamTest", Device="Xbox", DeviceId="jellyemu-streamtest", Version="1.0", Token="' + token + '"' } }).catch(function () {});
+                  }
+                  setInterval(flush, 4000);
+                  window.addEventListener('pagehide', flush);
+                  setTimeout(function () { dbg.style.display = 'none'; }, 15000);
+
+                  log('UA: ' + navigator.userAgent);
+                  log('page: ' + location.origin + ' secure=' + window.isSecureContext);
+                  if (!url) { log('No stream URL configured (jellyemu-stream-test.url)'); flush(); return; }
+                  log('stream: ' + url);
+                  f.addEventListener('load', function () { log('iframe loaded'); try { f.focus(); log('iframe focused'); } catch (e) { log('focus failed ' + e); } });
+                  f.src = url;
+                  window.addEventListener('blur', function () { log('top window blur (focus moved into iframe?)'); });
+                  window.addEventListener('focus', function () { log('top window focus'); });
+                  ['keydown'].forEach(function (n) { window.addEventListener(n, function (e) { log(n + ' key=' + e.key + ' keyCode=' + e.keyCode); }, true); });
+
+                  // Gamepad visibility in the top frame, plus the exit combo.
+                  var seen = false, exiting = false;
+                  function pressed(gp, i) { var b = gp.buttons[i]; return !!(b && (b.pressed || b.value > 0.5)); }
+                  function poll() {
+                    var pads = []; try { pads = navigator.getGamepads ? navigator.getGamepads() : []; } catch (e) {}
+                    for (var i = 0; i < pads.length; i++) {
+                      var gp = pads[i]; if (!gp) continue;
+                      if (!seen) { seen = true; log('top frame sees gamepad: ' + gp.id); }
+                      if (!exiting && pressed(gp, 6) && pressed(gp, 7) && pressed(gp, 10) && pressed(gp, 11)) {
+                        exiting = true; log('exit combo'); flush();
+                        f.src = 'about:blank';
+                        setTimeout(function () { history.length > 1 ? history.back() : (location.href = '{{baseUrl}}/web/'); }, 300);
+                      }
+                    }
+                    requestAnimationFrame(poll);
+                  }
+                  requestAnimationFrame(poll);
+                  setTimeout(function () { if (!seen) log('top frame sees no gamepad after 10s'); }, 10000);
+                })();
+                </script>
+                </body>
+                </html>
+                """;
+            return Content(html, "text/html");
         }
 
         /// <summary>
