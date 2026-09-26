@@ -114,7 +114,11 @@ namespace JellyEmu.Controllers
                   if (!url) { log('No stream URL configured (jellyemu-stream-test.url)'); flush(); return; }
                   log('stream: ' + url);
                   f.addEventListener('load', function () { log('iframe loaded'); try { f.focus(); log('iframe focused'); } catch (e) { log('focus failed ' + e); } });
-                  f.src = url;
+                  // Ask JellyEmu (with this user's Jellyfin login) for a one-time pass to the stream.
+                  JellyEmu.fetch('/jellyemu/stream/pass/{{js.Encode(itemId)}}', { method: 'POST' })
+                    .then(function (r) { if (!r.ok) throw new Error('pass HTTP ' + r.status); return r.json(); })
+                    .then(function (d) { log('pass received'); f.src = d.url; })
+                    .catch(function (e) { log('could not get a stream pass: ' + e.message); flush(); });
                   window.addEventListener('blur', function () { log('top window blur (focus moved into iframe?)'); });
                   window.addEventListener('focus', function () { log('top window focus'); });
                   ['keydown'].forEach(function (n) { window.addEventListener(n, function (e) { log(n + ' key=' + e.key + ' keyCode=' + e.keyCode); }, true); });
