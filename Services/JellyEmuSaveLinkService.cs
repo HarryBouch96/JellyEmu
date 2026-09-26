@@ -244,8 +244,9 @@ namespace JellyEmu.Services
         /// <summary>
         /// Moves every save file of <paramref name="fromId"/> (all users, all slots:
         /// states, in-game saves, screenshots) to <paramref name="toId"/>, and merges its
-        /// playtime. A file the new ID already has is never overwritten; the old one is
-        /// left in place and logged. Returns the number of files moved.
+        /// playtime. A file the new ID already has is never overwritten: an identical old
+        /// copy is removed, a different one is left in place and logged. Returns the
+        /// number of files moved (including removed duplicates).
         /// </summary>
         public int MoveSaves(string fromId, string toId)
         {
@@ -263,8 +264,14 @@ namespace JellyEmu.Services
                             var dest = Path.Combine(slotDir, toId + suffix);
                             if (File.Exists(dest))
                             {
+                                if (SameContents(file, dest))
+                                {
+                                    File.Delete(file); // exact duplicate, nothing to keep
+                                    moved++;
+                                    continue;
+                                }
                                 skipped++;
-                                _logger.LogWarning("[JellyEmu] Not moving {File}: the moved game already has {Dest}", file, dest);
+                                _logger.LogWarning("[JellyEmu] Not moving {File}: the moved game already has a different {Dest}", file, dest);
                                 continue;
                             }
                             File.Move(file, dest);
@@ -288,6 +295,14 @@ namespace JellyEmu.Services
             _logger.LogInformation("[JellyEmu] Moved {Moved} save files from item {From} to {To} (game file moved); {Skipped} left in place",
                 moved, fromId, toId, skipped);
             return moved;
+        }
+
+        private static bool SameContents(string a, string b)
+        {
+            var infoA = new FileInfo(a);
+            var infoB = new FileInfo(b);
+            if (infoA.Length != infoB.Length) return false;
+            return File.ReadAllBytes(a).AsSpan().SequenceEqual(File.ReadAllBytes(b));
         }
 
         private void MergePlaytime(string fromId, string toId)

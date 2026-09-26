@@ -163,6 +163,20 @@ namespace JellyEmu.Tests
         }
 
         [Fact]
+        public void MoveSaves_IdenticalDuplicate_IsRemoved()
+        {
+            WriteSave(UserA, 100, OldId + ".sav", 6);
+            WriteSave(UserA, 100, NewId + ".sav", 6);
+
+            var moved = _service.MoveSaves(OldId, NewId);
+
+            var slot = Path.Combine(_data, "jellyemu-saves", UserA, "slot100");
+            Assert.Equal(1, moved);
+            Assert.False(File.Exists(Path.Combine(slot, OldId + ".sav")));
+            Assert.Equal(6, File.ReadAllBytes(Path.Combine(slot, NewId + ".sav"))[0]);
+        }
+
+        [Fact]
         public void MoveSaves_MergesPlaytime()
         {
             var dbPath = Path.Combine(_data, "jellyemu-playtime.db");
