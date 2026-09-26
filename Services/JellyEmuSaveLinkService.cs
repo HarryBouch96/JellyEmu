@@ -16,7 +16,7 @@ namespace JellyEmu.Services
     /// Jellyfin derives an item's ID from its path, so moving or renaming a ROM
     /// (e.g. into its own folder) gives it a new ID, and saves, which are stored
     /// by item ID, are left behind. This service records a fingerprint of each
-    /// game's ROM files (file names and sizes) in jellyemu-save-index.json. When a
+    /// game's ROM file contents (so renames don't matter) in jellyemu-save-index.json. When a
     /// game is launched, saves belonging to a recorded game that no longer exists
     /// in the library but has the same fingerprint are moved across, along with
     /// its playtime.
@@ -86,26 +86,26 @@ namespace JellyEmu.Services
         }
 
         /// <summary>
-        /// Records fingerprints for every game that already has saves, so saves made
-        /// before this feature existed can follow a later move. Never throws.
+        /// Records (or refreshes) fingerprints for every game in the library that has
+        /// saves, so saves made before a game was ever launched with this feature can
+        /// follow a later move. Never throws.
         /// </summary>
         public void BackfillFromSaves()
         {
             try
             {
-                var index = LoadIndex();
                 var added = 0;
                 foreach (var itemId in ItemIdsWithSaves())
                 {
-                    if (index.ContainsKey(itemId) || _libraryManager == null) continue;
+                    if (_libraryManager == null) break;
                     if (!Guid.TryParseExact(itemId, "N", out var guid)) continue;
                     var item = _libraryManager.GetItemById(guid);
                     if (item == null) continue;
                     var fingerprint = ComputeFingerprint(item.Path);
                     if (fingerprint == null) continue;
-                    Remember(itemId, fingerprint, item.Name);
-                    added++;
+                    if (Remember(itemId, fingerprint, item.Name)) added++;
                 }
+                PruneOutdatedEntries();
                 if (added > 0)
                     _logger.LogInformation("[JellyEmu] Recorded ROM fingerprints for {Count} games with saves", added);
             }
@@ -134,16 +134,57 @@ namespace JellyEmu.Services
 
         // ---- Core logic (independent of the Jellyfin library, unit tested) --------------
 
+        // Text sheets name the files they point to, so they change when those are renamed.
+        private static readonly HashSet<string> SheetExtensions = new(StringComparer.OrdinalIgnoreCase)
+        {
+            ".cue", ".m3u", ".gdi", ".ccd", ".j3u"
+        };
+
+        private const int SampleCount = 8;
+        private const int SampleSize = 16 * 1024;
+        private const string FingerprintVersion = "v2:";
+
+        /// <summary>
+        /// Content fingerprint of a game's files, independent of their names and
+        /// location: each file's size plus a hash of evenly spaced samples of its
+        /// contents (the whole file when small). Cheap even for large disc images.
+        /// </summary>
         public static string? ComputeFingerprint(IEnumerable<string> files)
         {
             var parts = files
                 .Where(JellyEmuFileService.IsRomLikeFile)
-                .Select(f => Path.GetFileName(f).ToLowerInvariant() + "|" + new FileInfo(f).Length)
+                .Where(f => !SheetExtensions.Contains(Path.GetExtension(f)))
+                .Select(FileFingerprint)
                 .OrderBy(p => p, StringComparer.Ordinal)
                 .ToList();
             if (parts.Count == 0) return null;
             var hash = SHA256.HashData(Encoding.UTF8.GetBytes(string.Join("\n", parts)));
-            return Convert.ToHexString(hash).ToLowerInvariant();
+            return FingerprintVersion + Convert.ToHexString(hash).ToLowerInvariant();
+        }
+
+        private static string FileFingerprint(string path)
+        {
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            var length = stream.Length;
+            using var sha = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+            var buffer = new byte[SampleSize];
+
+            if (length <= (long)SampleCount * SampleSize)
+            {
+                int read;
+                while ((read = stream.Read(buffer, 0, buffer.Length)) > 0) sha.AppendData(buffer, 0, read);
+            }
+            else
+            {
+                var lastStart = length - SampleSize;
+                for (var i = 0; i < SampleCount; i++)
+                {
+                    stream.Position = lastStart * i / (SampleCount - 1);
+                    stream.ReadExactly(buffer, 0, SampleSize);
+                    sha.AppendData(buffer, 0, SampleSize);
+                }
+            }
+            return length + ":" + Convert.ToHexString(sha.GetHashAndReset());
         }
 
         /// <summary>
@@ -158,14 +199,35 @@ namespace JellyEmu.Services
                 .ToList();
         }
 
-        public void Remember(string itemId, string fingerprint, string? name)
+        /// <summary>Records a game's fingerprint. Returns false when it was already up to date.</summary>
+        public bool Remember(string itemId, string fingerprint, string? name)
         {
             lock (IndexLock)
             {
                 var index = LoadIndex();
                 if (index.TryGetValue(itemId, out var existing) && existing.Fingerprint == fingerprint && existing.Name == (name ?? string.Empty))
-                    return;
+                    return false;
                 index[itemId] = new IndexEntry { Fingerprint = fingerprint, Name = name ?? string.Empty, Updated = DateTime.UtcNow };
+                SaveIndex(index);
+                return true;
+            }
+        }
+
+        /// <summary>
+        /// Drops entries from an older fingerprint format for games no longer in the
+        /// library: they can never be matched again (existing games are refreshed).
+        /// </summary>
+        private void PruneOutdatedEntries()
+        {
+            lock (IndexLock)
+            {
+                var index = LoadIndex();
+                var outdated = index
+                    .Where(e => !e.Value.Fingerprint.StartsWith(FingerprintVersion, StringComparison.Ordinal) && !ItemExists(e.Key))
+                    .Select(e => e.Key)
+                    .ToList();
+                if (outdated.Count == 0) return;
+                outdated.ForEach(id => index.Remove(id));
                 SaveIndex(index);
             }
         }

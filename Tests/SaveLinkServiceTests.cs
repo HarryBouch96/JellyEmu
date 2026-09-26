@@ -66,14 +66,56 @@ namespace JellyEmu.Tests
         }
 
         [Fact]
-        public void Fingerprint_DifferentSizeOrName_DoesNotMatch()
+        public void Fingerprint_MovedAndRenamed_Matches()
         {
-            var a = WriteFile(Path.Combine("a", "Pokemon - Sapphire.gba"), 1000);
-            var b = WriteFile(Path.Combine("b", "Pokemon - Sapphire.gba"), 1001);
-            var c = WriteFile(Path.Combine("c", "Pokemon - Ruby.gba"), 1000);
+            // The Pokemon Sapphire case: moved into its own folder *and* renamed.
+            var before = WriteFile(Path.Combine("GBA", "Pokemon - Sapphire Version (USA, Europe).gba"), 16 * 1024 * 1024, 7);
+            WriteFile(Path.Combine("GBA-after", "Pokemon Sapphire Version [igdb-1515]", "Pokemon Sapphire Version.gba"), 16 * 1024 * 1024, 7);
+
+            Assert.Equal(
+                _service.ComputeFingerprint(before),
+                _service.ComputeFingerprint(Path.Combine(_root, "GBA-after", "Pokemon Sapphire Version [igdb-1515]")));
+        }
+
+        [Fact]
+        public void Fingerprint_DifferentSizeOrContents_DoesNotMatch()
+        {
+            var a = WriteFile(Path.Combine("a", "game.gba"), 1000, 1);
+            var b = WriteFile(Path.Combine("b", "game.gba"), 1001, 1);
+            var c = WriteFile(Path.Combine("c", "game.gba"), 1000, 2);
 
             Assert.NotEqual(_service.ComputeFingerprint(a), _service.ComputeFingerprint(b));
             Assert.NotEqual(_service.ComputeFingerprint(a), _service.ComputeFingerprint(c));
+        }
+
+        [Fact]
+        public void Fingerprint_LargeFile_DetectsChangeInsideASample()
+        {
+            var size = 4 * 1024 * 1024;
+            var a = WriteFile(Path.Combine("a", "disc.bin"), size, 3);
+            var b = WriteFile(Path.Combine("b", "disc.bin"), size, 3);
+            var before = _service.ComputeFingerprint(a);
+            Assert.Equal(before, _service.ComputeFingerprint(b));
+
+            using (var stream = new FileStream(b, FileMode.Open, FileAccess.Write))
+            {
+                stream.Position = size - 1; // inside the last sample
+                stream.WriteByte(4);
+            }
+            Assert.NotEqual(before, _service.ComputeFingerprint(b));
+        }
+
+        [Fact]
+        public void Fingerprint_IgnoresCueSheets_SoRenamedDiscImagesMatch()
+        {
+            var before = Path.Combine(_root, "PS1", "Theme Park World (Europe) (En,Fr,De,Es,It,Nl,Sv)");
+            WriteFile(Path.Combine(before, "Theme Park World (Europe) (En,Fr,De,Es,It,Nl,Sv).bin"), 300000, 5);
+            File.WriteAllText(Path.Combine(before, "Theme Park World (Europe) (En,Fr,De,Es,It,Nl,Sv).cue"), "FILE \"Theme Park World (Europe) (En,Fr,De,Es,It,Nl,Sv).bin\" BINARY");
+            var after = Path.Combine(_root, "PS1", "Theme Park World [igdb-12484]");
+            WriteFile(Path.Combine(after, "Theme Park World.bin"), 300000, 5);
+            File.WriteAllText(Path.Combine(after, "Theme Park World.cue"), "FILE \"Theme Park World.bin\" BINARY");
+
+            Assert.Equal(_service.ComputeFingerprint(before), _service.ComputeFingerprint(after));
         }
 
         [Fact]
