@@ -525,7 +525,12 @@ function Write-SunshineConf {
         # Its web page only from this PC (the bridge pairs through it during setup).
         'origin_web_ui_allowed = pc'
     )
-    if ($script:outputName) { $lines += "output_name = $($script:outputName)" }
+    if ($script:outputName) {
+        $lines += "output_name = $($script:outputName)"
+        # Switch the virtual monitor on when a stream starts. Windows may not have it as part of
+        # the desktop (off, or mirroring the main screen), and then there's nothing to capture.
+        $lines += 'dd_configuration_option = ensure_active'
+    }
     $lines | Set-Content -LiteralPath $sunshineConf -Encoding ASCII
 }
 Write-SunshineConf
