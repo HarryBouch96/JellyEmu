@@ -640,6 +640,14 @@ if (-not $service) {
     if ($LASTEXITCODE -ne 0) { throw "Couldn't create the $serviceName service" }
     Say "Created the $serviceName service"
 }
+# Sunshine's service wrapper writes to sunshine.log in the Windows temp folder, which every Sunshine
+# service shares: next to another Sunshine (the usual one) it can't open that file and stops. So
+# this service gets a temp folder of its own.
+$serviceTemp = Join-Path $sunshineData 'temp'
+New-Item -ItemType Directory -Force -Path $serviceTemp | Out-Null
+New-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\$serviceName" -Name Environment -PropertyType MultiString `
+    -Value @("TEMP=$serviceTemp", "TMP=$serviceTemp") -Force | Out-Null
+
 $sunshineLog = Join-Path $sunshineData 'sunshine.log'
 Remove-Item -LiteralPath $sunshineLog -ErrorAction SilentlyContinue
 Start-Service $serviceName
