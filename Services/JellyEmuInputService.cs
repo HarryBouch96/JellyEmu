@@ -74,9 +74,10 @@ namespace JellyEmu.Services
             { 27, new() { Kb1 = 107, Kb2 = 0, Gp1 = "",                      Gp2 = "" } },
             { 28, new() { Kb1 = 32,  Kb2 = 0, Gp1 = "",                      Gp2 = "" } },
             { 29, new() { Kb1 = 109, Kb2 = 0, Gp1 = "",                      Gp2 = "" } },
-            { 30, new() { Kb1 = 27,  Kb2 = 0, Gp1 = "",                      Gp2 = "" } },
-            // LT+RT+L3+R3: opens the controller-navigable menu (save, exit, settings...), e.g. on the Xbox app.
-            { 31, new() { Kb1 = 0,   Kb2 = 0, Gp1 = "LEFT_BOTTOM_SHOULDER+RIGHT_BOTTOM_SHOULDER+LEFT_STICK+RIGHT_STICK", Gp2 = "" } }
+            { 30, new() { Kb1 = 0,   Kb2 = 0, Gp1 = "",                      Gp2 = "" } },
+            // Opens the menu (save, exit, settings...), in the browser and when streaming: Escape on a
+            // keyboard, LT+RT+L3+R3 on a controller. Exiting is in the menu, so it's never one keypress away.
+            { 31, new() { Kb1 = 27,  Kb2 = 0, Gp1 = "LEFT_BOTTOM_SHOULDER+RIGHT_BOTTOM_SHOULDER+LEFT_STICK+RIGHT_STICK", Gp2 = "" } }
         };
 
         private static readonly Dictionary<string, Dictionary<int, InputBindingDefault>> SchemeDefaultOverrides =
@@ -210,6 +211,24 @@ namespace JellyEmu.Services
                     }
                 },
                 {
+                    "gamecube", new()
+                    {
+                        { 0,  new() { Kb1 = 88, Kb2 = 0, Gp1 = "BUTTON_1", Gp2 = "" } },              // A
+                        { 8,  new() { Kb1 = 90, Kb2 = 0, Gp1 = "BUTTON_2", Gp2 = "" } },              // B
+                        { 1,  new() { Kb1 = 83, Kb2 = 0, Gp1 = "BUTTON_3", Gp2 = "" } },              // X
+                        { 9,  new() { Kb1 = 65, Kb2 = 0, Gp1 = "BUTTON_4", Gp2 = "" } },              // Y
+                        { 11, new() { Kb1 = 87, Kb2 = 0, Gp1 = "RIGHT_TOP_SHOULDER", Gp2 = "" } },    // Z
+                        { 12, new() { Kb1 = 81, Kb2 = 0, Gp1 = "LEFT_BOTTOM_SHOULDER", Gp2 = "" } },  // L
+                        { 13, new() { Kb1 = 69, Kb2 = 0, Gp1 = "RIGHT_BOTTOM_SHOULDER", Gp2 = "" } }, // R
+                        // Analog pad: the stick only drives the stick (no doubling as the D-pad).
+                        { 4,  new() { Kb1 = 38, Kb2 = 0, Gp1 = "DPAD_UP", Gp2 = "" } },
+                        { 5,  new() { Kb1 = 40, Kb2 = 0, Gp1 = "DPAD_DOWN", Gp2 = "" } },
+                        { 6,  new() { Kb1 = 37, Kb2 = 0, Gp1 = "DPAD_LEFT", Gp2 = "" } },
+                        { 7,  new() { Kb1 = 39, Kb2 = 0, Gp1 = "DPAD_RIGHT", Gp2 = "" } },
+                        { 3,  new() { Kb1 = 13, Kb2 = 0, Gp1 = "START", Gp2 = "" } }
+                    }
+                },
+                {
                     "ps2", new()
                     {
                         { 0,  new() { Kb1 = 88, Kb2 = 0, Gp1 = "BUTTON_1", Gp2 = "" } }, // CROSS
@@ -223,6 +242,11 @@ namespace JellyEmu.Services
                         { 12, new() { Kb1 = 9,  Kb2 = 0, Gp1 = "LEFT_BOTTOM_SHOULDER", Gp2 = "" } },
                         { 13, new() { Kb1 = 82, Kb2 = 0, Gp1 = "RIGHT_BOTTOM_SHOULDER", Gp2 = "" } },
                         { 14, new() { Kb1 = 0,  Kb2 = 0, Gp1 = "LEFT_STICK", Gp2 = "" } },
+                        // Analog pad: the stick only drives the stick (no doubling as the D-pad).
+                        { 4,  new() { Kb1 = 38, Kb2 = 0, Gp1 = "DPAD_UP", Gp2 = "" } },
+                        { 5,  new() { Kb1 = 40, Kb2 = 0, Gp1 = "DPAD_DOWN", Gp2 = "" } },
+                        { 6,  new() { Kb1 = 37, Kb2 = 0, Gp1 = "DPAD_LEFT", Gp2 = "" } },
+                        { 7,  new() { Kb1 = 39, Kb2 = 0, Gp1 = "DPAD_RIGHT", Gp2 = "" } },
                         { 15, new() { Kb1 = 0,  Kb2 = 0, Gp1 = "RIGHT_STICK", Gp2 = "" } }
                     }
                 },
@@ -709,6 +733,34 @@ namespace JellyEmu.Services
                     }, new List<int> { 16, 17, 18, 19, 20, 21, 22, 23 })
                 },
                 {
+                    // Streamed from a gaming PC (no browser emulator). Buttons by position:
+                    // A bottom, B right, X left, Y top, Z right bumper, L/R triggers, C-stick right stick.
+                    "gamecube",
+                    ("GameCube", new List<InputButtonDefinition>
+                    {
+                        new() { Id = 0, Label = "A" },
+                        new() { Id = 8, Label = "B" },
+                        new() { Id = 1, Label = "X" },
+                        new() { Id = 9, Label = "Y" },
+                        new() { Id = 11, Label = "Z" },
+                        new() { Id = 12, Label = "L" },
+                        new() { Id = 13, Label = "R" },
+                        new() { Id = 3, Label = "START" },
+                        new() { Id = 4, Label = "UP" },
+                        new() { Id = 5, Label = "DOWN" },
+                        new() { Id = 6, Label = "LEFT" },
+                        new() { Id = 7, Label = "RIGHT" },
+                        new() { Id = 19, Label = "STICK UP" },
+                        new() { Id = 18, Label = "STICK DOWN" },
+                        new() { Id = 17, Label = "STICK LEFT" },
+                        new() { Id = 16, Label = "STICK RIGHT" },
+                        new() { Id = 23, Label = "C-STICK UP" },
+                        new() { Id = 22, Label = "C-STICK DOWN" },
+                        new() { Id = 21, Label = "C-STICK LEFT" },
+                        new() { Id = 20, Label = "C-STICK RIGHT" }
+                    }, new List<int> { 16, 17, 18, 19, 20, 21, 22, 23 })
+                },
+                {
                     "arcade",
                     ("Arcade", new List<InputButtonDefinition>
                     {
@@ -833,6 +885,7 @@ namespace JellyEmu.Services
             { "PSP", "psp" }, { "PLAYSTATION PORTABLE", "psp" },
             { "PLAYSTATION", "psx" }, { "PSX", "psx" }, { "PS1", "psx" },
             { "PLAYSTATION 2", "ps2" }, { "PLAYSTATION2", "ps2" }, { "PS2", "ps2" },
+            { "GAMECUBE", "gamecube" }, { "NINTENDO GAMECUBE", "gamecube" }, { "GC", "gamecube" },
             { "ARCADE", "arcade" }, { "MAME", "arcade" }, { "MAME 2003", "arcade" }
         };
 

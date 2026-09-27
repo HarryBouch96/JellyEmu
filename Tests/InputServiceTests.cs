@@ -198,9 +198,38 @@ namespace JellyEmu.Tests
             Assert.Contains(scheme.Buttons, b => b.Id == 31 && b.Label == "OPEN MENU");
             Assert.Equal("LEFT_BOTTOM_SHOULDER+RIGHT_BOTTOM_SHOULDER+LEFT_STICK+RIGHT_STICK", scheme.DefaultBindings[31].Gp1);
 
-            // Exit Game stays on Escape only; exiting by controller goes through the menu.
-            Assert.Equal(27, scheme.DefaultBindings[30].Kb1);
+            // Escape opens the menu; exiting is in the menu, so no key or button exits directly.
+            Assert.Equal(27, scheme.DefaultBindings[31].Kb1);
+            Assert.Equal(0, scheme.DefaultBindings[30].Kb1);
             Assert.Equal(string.Empty, scheme.DefaultBindings[30].Gp1);
+        }
+
+        [Fact]
+        public void GetScheme_GameCube_MapsButtonsByPosition()
+        {
+            var scheme = _inputService.GetScheme("GameCube");
+
+            Assert.Equal("gamecube", scheme.Id);
+            Assert.Contains(scheme.Buttons, b => b.Id == 11 && b.Label == "Z");
+            Assert.Equal("BUTTON_1", scheme.DefaultBindings[0].Gp1);   // A: bottom face button
+            Assert.Equal("BUTTON_2", scheme.DefaultBindings[8].Gp1);   // B: right
+            Assert.Equal("RIGHT_TOP_SHOULDER", scheme.DefaultBindings[11].Gp1); // Z
+            Assert.Equal("LEFT_BOTTOM_SHOULDER", scheme.DefaultBindings[12].Gp1); // L trigger
+        }
+
+        [Theory]
+        [InlineData("GameCube")]
+        [InlineData("PlayStation 2")]
+        public void GetScheme_AnalogSystems_StickDoesNotDoubleAsDpad(string platform)
+        {
+            var scheme = _inputService.GetScheme(platform);
+
+            for (var id = 4; id <= 7; id++)
+            {
+                Assert.StartsWith("DPAD_", scheme.DefaultBindings[id].Gp1);
+                Assert.Equal(string.Empty, scheme.DefaultBindings[id].Gp2);
+            }
+            Assert.Equal("LEFT_STICK_X:+1", scheme.DefaultBindings[16].Gp1);
         }
 
         [Fact]
