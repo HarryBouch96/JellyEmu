@@ -72,7 +72,7 @@
     // Value (0..1) of one binding label on a real controller: a button, an axis direction
     // ("LEFT_STICK_X:+1"), or a combo of them ("A+B", all must be held).
     function labelValue(pad, label) {
-        if (!pad || !label) return 0;
+        if (!pad || !label || typeof label !== 'string') return 0;
         var parts = label.split(/(?<!:)\+/);
         if (parts.length > 1) {
             var min = 1;
@@ -121,7 +121,10 @@
     var pad = makePad(new Array(17).fill(0), [0, 0, 0, 0]);
     var lastUpdate = 0;
     function getGamepads() {
-        if (performance.now() - lastUpdate > 4) update();
+        if (performance.now() - lastUpdate > 4) {
+            // Never let a problem here break the bridge's own controller loop.
+            try { update(); } catch (e) { lastUpdate = performance.now(); console.error('[JellyEmu] stream layer', e); }
+        }
         return [pad];
     }
     try {
@@ -161,7 +164,7 @@
 
         // Tell the host when a real controller is used (it hides on-screen controls in "auto").
         var realPress = !!(real && real.buttons.some(function (b) { return b && b.pressed; }));
-        if (realPress && !lastRealPress) { send('input', { kind: 'controller' }); begin(); }
+        if (realPress && !lastRealPress) { send('input', { kind: 'controller' }); begin(); unlockMedia(); }
         lastRealPress = realPress;
 
         if (holdUntilReleased) {
@@ -182,17 +185,21 @@
         pad = makePad(buttons, axes);
     }
     (function tick() {
-        update();
         requestAnimationFrame(tick);
+        getGamepads();
     })();
 
     // ---- Keyboard, mouse and touch: consumed here, never sent raw to the gaming PC ----------
     function onKey(e) {
         e.preventDefault();
         e.stopImmediatePropagation();
-        // Some hosts also send key events for controller buttons (key "Unidentified"); the
-        // controller itself is read above, so those are ignored.
-        if (e.key === 'Unidentified') return;
+        // Some hosts (the Xbox app) also send key events for controller buttons, with key
+        // "Unidentified". The controller itself is read above, so they don't count as keys, but
+        // they are the user's action, which the bridge needs before it plays video and sound.
+        if (e.key === 'Unidentified') {
+            if (e.type === 'keydown') { begin(); unlockMedia(); }
+            return;
+        }
         if (e.type === 'keydown') {
             if (!e.repeat) { send('input', { kind: 'keyboard' }); begin(); unlockMedia(); }
             keysDown[e.keyCode] = true;
