@@ -399,7 +399,15 @@ if ($Stage) {
 Step 'Drivers'
 if (-not (Get-Service ViGEmBus -ErrorAction SilentlyContinue)) {
     Say 'Installing ViGEmBus (lets Sunshine create a controller for the game)'
-    $p = Start-Process -FilePath (Get-Component 'vigembus') -ArgumentList '/exenoui', '/qn', '/norestart' -Wait -PassThru
+    $vigemSetup = Get-Component 'vigembus'
+    # Windows runs one installer at a time; 1618 means another one (often Windows Update) is busy.
+    for ($try = 1; ; $try++) {
+        $p = Start-Process -FilePath $vigemSetup -ArgumentList '/exenoui', '/qn', '/norestart' -Wait -PassThru
+        if ($p.ExitCode -ne 1618 -or $try -ge 40) { break }
+        if ($try -eq 1) { Say 'Windows is installing something else (probably Windows Update); waiting for it to finish...' }
+        Start-Sleep -Seconds 15
+    }
+    if ($p.ExitCode -eq 1618) { throw 'Windows was busy installing something else for 10 minutes. Let Windows Update finish (or restart the PC), then run this setup again.' }
     if ($p.ExitCode -notin 0, 3010) { throw "ViGEmBus setup failed (exit code $($p.ExitCode))" }
 } else { Say 'ViGEmBus is already installed' }
 
