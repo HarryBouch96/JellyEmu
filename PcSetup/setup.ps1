@@ -102,8 +102,15 @@ function Protect-Folder([string]$path, [string]$userRights) {
     # Nothing for anyone else: some of these files run as SYSTEM, and device.json holds the key.
     New-Item -ItemType Directory -Force -Path $path | Out-Null
     if ($Stage) { return }
-    $out = icacls $path /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' "${me}:(OI)(CI)$userRights" /T /C /Q 2>&1
+    # Set on the folder only; everything inside inherits it. (Setting these on each file with /T
+    # left files with no permissions at all: folder-inheritance grants don't apply to files.)
+    $grants = @('*S-1-5-18:(OI)(CI)F', '*S-1-5-32-544:(OI)(CI)F', "${me}:(OI)(CI)$userRights")
+    $out = icacls $path '/inheritance:r' '/grant:r' @grants '/C' '/Q' 2>&1
     if ($LASTEXITCODE -ne 0) { throw "Couldn't set permissions on ${path}: $out" }
+    if (Get-ChildItem -LiteralPath $path -Force | Select-Object -First 1) {
+        $out = icacls (Join-Path $path '*') '/reset' '/T' '/C' '/Q' 2>&1
+        if ($LASTEXITCODE -ne 0) { throw "Couldn't set permissions inside ${path}: $out" }
+    }
 }
 
 Step 'JellyEmu gaming PC setup'
