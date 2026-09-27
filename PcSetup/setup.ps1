@@ -559,7 +559,11 @@ if (-not $outputName) {
     for ($i = 0; $i -lt 40 -and -not $found; $i++) {
         Start-Sleep -Seconds 1
         if (-not (Test-Path -LiteralPath $sunshineLog)) { continue }
-        $text = [IO.File]::ReadAllText($sunshineLog)
+        # Sunshine keeps its log open for writing: read it with sharing allowed.
+        try {
+            $stream = [IO.File]::Open($sunshineLog, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete)
+            try { $text = (New-Object IO.StreamReader($stream)).ReadToEnd() } finally { $stream.Dispose() }
+        } catch { continue }
         $at = $text.IndexOf('Currently available display devices:')
         if ($at -lt 0) { continue }
         $json = [regex]::Match($text.Substring($at), '(?s)\n(\[.*?\n\])').Groups[1].Value
