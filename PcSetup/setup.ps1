@@ -614,6 +614,22 @@ $bridgeConfigFile = Join-Path $bridgeDir 'server\config.json'
 New-Item -ItemType Directory -Force -Path (Split-Path $bridgeConfigFile) | Out-Null
 $bridgeConfig = [ordered]@{
     data_storage = [ordered]@{ type = 'json'; path = 'server/data.json'; session_expiration_check_interval = @{ secs = 300; nanos = 0 } }
+    # The bridge's own defaults (what it writes when it has no config), spelled out: its direct
+    # (WebRTC) connections depend on them.
+    webrtc = [ordered]@{
+        ice_servers = @([ordered]@{
+            urls = @('stun:stun.l.google.com:19302', 'stun:stun.l.google.com:5349', 'stun:stun1.l.google.com:3478', 'stun:stun1.l.google.com:5349',
+                     'stun:stun2.l.google.com:19302', 'stun:stun2.l.google.com:5349', 'stun:stun3.l.google.com:3478', 'stun:stun3.l.google.com:5349',
+                     'stun:stun4.l.google.com:19302', 'stun:stun4.l.google.com:5349')
+            username = ''
+            credential = ''
+        })
+        ice_server_script = $null
+        port_range = $null
+        nat_1to1 = $null
+        network_types = @('udp4', 'udp6')
+        include_loopback_candidates = $true
+    }
     web_server = [ordered]@{
         bind_address = "0.0.0.0:$($config.bridgePort)"
         certificate = $null
