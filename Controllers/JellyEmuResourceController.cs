@@ -162,6 +162,33 @@ namespace JellyEmu.Controllers
         }
 
         /// <summary>
+        /// EXPERIMENT (experiment/game-streaming): the stream layer, loaded by the game-streaming
+        /// bridge's own page (another origin) when it's embedded in JellyEmu's stream page.
+        /// Path: GET /jellyemu/assets/streamlayer.js
+        /// </summary>
+        [HttpGet("/jellyemu/assets/streamlayer.js")]
+        [Produces("application/javascript")]
+        [ProducesResponseType(StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status404NotFound)]
+        public IActionResult StreamLayerJs()
+        {
+            return ServeEmbeddedFile("Web.stream.jellyemu.streamlayer.js", "application/javascript; charset=utf-8");
+        }
+
+        /// <summary>
+        /// EXPERIMENT: JellyEmu's stream page (menu, on-screen controls, bindings).
+        /// Path: GET /jellyemu/assets/streamhost.js
+        /// </summary>
+        [HttpGet("/jellyemu/assets/streamhost.js")]
+        [Produces("application/javascript")]
+        [ProducesResponseType(StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status404NotFound)]
+        public IActionResult StreamHostJs()
+        {
+            return ServeEmbeddedFile("Web.stream.jellyemu.streamhost.js", "application/javascript; charset=utf-8");
+        }
+
+        /// <summary>
         /// Serves the stylesheet embedded CSS resource.
         /// Path: GET /jellyemu/assets/ejs.style.css
         /// </summary>

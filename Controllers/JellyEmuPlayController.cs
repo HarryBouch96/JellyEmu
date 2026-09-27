@@ -52,10 +52,10 @@ namespace JellyEmu.Controllers
             {
                 if (device.Length > 32 || !device.All(c => char.IsAsciiLetterOrDigit(c) || c == '-'))
                     return BadRequest("Invalid device.");
-                return StreamTest(itemId, device);
+                return await StreamPage(item, itemId, userId, device);
             }
             if (string.IsNullOrEmpty(device) && JellyEmuStreamController.StreamsWithoutPicker(AppPaths, ResolvePlatformTag(item)))
-                return StreamTest(itemId, string.Empty);
+                return await StreamPage(item, itemId, userId, string.Empty);
 
             var resolvedCore = ResolveCore(item, userId, core);
 
@@ -68,120 +68,55 @@ namespace JellyEmu.Controllers
         }
 
         /// <summary>
-        /// EXPERIMENT: full-screen page embedding a moonlight-web-stream session (Sunshine on the
-        /// gaming laptop, bridged to WebRTC). Gets a one-time pass from JellyEmuStreamController,
-        /// sends heartbeats while open, and on LT+RT+L3+R3 quits the game and goes back to
-        /// Jellyfin. Logs diagnostics to the Jellyfin client log.
+        /// EXPERIMENT: full-screen page for a game streamed from a gaming PC (Sunshine, bridged to
+        /// WebRTC by moonlight-web-stream). The page itself is Web/stream/jellyemu.streamhost.js;
+        /// this hands it the game, the gaming PC and the player's controls for this system.
         /// </summary>
-        private ContentResult StreamTest(string itemId, string device)
+        private async Task<ContentResult> StreamPage(MediaBrowser.Controller.Entities.BaseItem item, string itemId, string? userId, string device)
         {
             var baseUrl = ToAppUrl(string.Empty).TrimEnd('/');
-            var js = JavaScriptEncoder.Default;
+            var platformTag = ResolvePlatformTag(item);
+
+            var inputService = HttpContext.RequestServices.GetService(typeof(JellyEmuInputService)) as JellyEmuInputService;
+            var scheme = inputService?.GetScheme(platformTag);
+            var controls = string.IsNullOrEmpty(userId)
+                ? null
+                : (await PreferenceService.GetEffectivePreferencesAsync(userId, platformTag)).Controls;
+
+            // Re-serialised rather than pasted in, so nothing in saved controls can end the script.
+            object? customBindings = null;
+            if (!string.IsNullOrWhiteSpace(controls) && controls.TrimStart().StartsWith('{'))
+            {
+                try { customBindings = System.Text.Json.JsonDocument.Parse(controls).RootElement.Clone(); }
+                catch (System.Text.Json.JsonException) { customBindings = null; }
+            }
+
+            var config = System.Text.Json.JsonSerializer.Serialize(new
+            {
+                itemId,
+                deviceQuery = string.IsNullOrEmpty(device) ? string.Empty : "?device=" + Uri.EscapeDataString(device),
+                exitUrl = baseUrl + "/web/#/details?id=" + itemId,
+                scheme,
+                customBindings
+            }, new System.Text.Json.JsonSerializerOptions { PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase });
 
             var html = $$"""
                 <!DOCTYPE html>
                 <html>
                 <head>
                 <meta charset="utf-8">
-                <meta name="viewport" content="width=device-width, initial-scale=1.0">
-                <title>Streaming</title>
-                <script src="{{baseUrl}}/jellyemu/assets/jellyemu.utils.js"></script>
+                <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+                <title>{{HtmlEncoder.Default.Encode(item.Name ?? "Streaming")}}</title>
                 <style>
                   html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
-                  iframe { border: 0; width: 100%; height: 100%; display: block; }
-                  #dbg { position: fixed; top: 6px; left: 6px; z-index: 9; max-width: 60vw; color: #7CFC00;
-                         font: 13px/1.35 monospace; background: rgba(0,0,0,.7); padding: 4px 8px;
-                         white-space: pre-wrap; pointer-events: none; border-radius: 4px; }
+                  #je-stream { border: 0; width: 100%; height: 100%; display: block; }
                 </style>
                 </head>
                 <body>
-                <iframe id="f" allow="gamepad *; autoplay *; fullscreen *; keyboard-map *; clipboard-read *; clipboard-write *" allowfullscreen></iframe>
-                <div id="dbg"></div>
-                <script>
-                (function () {
-                  var exitUrl = "{{js.Encode(baseUrl + "/web/#/details?id=" + itemId)}}";
-                  var t0 = Date.now(), lines = [], unsent = [], dbg = document.getElementById('dbg'), f = document.getElementById('f');
-                  function log(m) {
-                    var l = ((Date.now() - t0) / 1000).toFixed(1) + 's ' + m;
-                    lines.push(l); unsent.push(l);
-                    dbg.textContent = 'JellyEmu stream diagnostics\n' + lines.slice(-12).join('\n');
-                  }
-                  function flush() {
-                    if (!unsent.length || !window.JellyEmu) return;
-                    var token = JellyEmu.getAuthToken(); if (!token) return;
-                    var body = unsent.join('\n'); unsent = [];
-                    fetch(JellyEmu.getUrl('/ClientLog/Document'), { method: 'POST', keepalive: true, body: body,
-                      headers: { 'Content-Type': 'text/plain', 'Authorization': 'MediaBrowser Client="JellyEmu-StreamTest", Device="Xbox", DeviceId="jellyemu-streamtest", Version="1.0", Token="' + token + '"' } }).catch(function () {});
-                  }
-                  setInterval(flush, 4000);
-                  window.addEventListener('pagehide', flush);
-                  setTimeout(function () { dbg.style.display = 'none'; }, 15000);
-
-                  log('UA: ' + navigator.userAgent);
-                  log('page: ' + location.origin + ' secure=' + window.isSecureContext);
-                  f.addEventListener('load', function () { log('iframe loaded'); try { f.focus(); log('iframe focused'); } catch (e) { log('focus failed ' + e); } });
-                  // Ask JellyEmu (with this user's Jellyfin login) for a one-time pass to the stream.
-                  var deviceQuery = "{{js.Encode(string.IsNullOrEmpty(device) ? "" : "?device=" + Uri.EscapeDataString(device))}}";
-                  JellyEmu.fetch('/jellyemu/stream/pass/{{js.Encode(itemId)}}' + deviceQuery, { method: 'POST' })
-                    .then(function (r) {
-                      if (r.status === 409) return r.json().then(function (d) { throw new Error(d.message); });
-                      if (!r.ok) throw new Error('Could not start the stream (HTTP ' + r.status + ').');
-                      return r.json();
-                    })
-                    .then(function (d) { log('pass received'); f.src = d.url; })
-                    .catch(function (e) { showMessage(e.message); log('no stream: ' + e.message); flush(); });
-
-                  // Back to the game's page. Step back rather than loading it again, so the page
-                  // isn't in the history twice (which made "back" need two presses afterwards).
-                  // The iframe is removed first so its own history can't swallow the step.
-                  function leave() {
-                    if (f.parentNode) f.parentNode.removeChild(f);
-                    var here = location.href;
-                    if (history.length > 1) history.back();
-                    setTimeout(function () { if (location.href === here) location.replace(exitUrl); }, 1500);
-                  }
-
-                  function showMessage(text) {
-                    var m = document.createElement('div');
-                    m.textContent = text;
-                    m.style.cssText = 'position:fixed;inset:0;display:flex;align-items:center;justify-content:center;color:#fff;font:24px sans-serif;text-align:center;padding:40px';
-                    document.body.appendChild(m);
-                    // Returns by itself, or straight away on any key, button or tap.
-                    var done = false;
-                    function go() { if (!done) { done = true; leave(); } }
-                    setTimeout(go, 5000);
-                    window.addEventListener('keydown', go, { once: true });
-                    window.addEventListener('pointerdown', go, { once: true });
-                  }
-
-                  // Tell JellyEmu the stream is still open, so nobody else takes over the gaming PC.
-                  setInterval(function () { JellyEmu.fetch('/jellyemu/stream/heartbeat' + deviceQuery, { method: 'POST' }).catch(function () {}); }, 15000);
-                  window.addEventListener('blur', function () { log('top window blur (focus moved into iframe?)'); });
-                  window.addEventListener('focus', function () { log('top window focus'); });
-                  ['keydown'].forEach(function (n) { window.addEventListener(n, function (e) { log(n + ' key=' + e.key + ' keyCode=' + e.keyCode); }, true); });
-
-                  // Gamepad visibility in the top frame, plus the exit combo.
-                  var seen = false, exiting = false;
-                  function pressed(gp, i) { var b = gp.buttons[i]; return !!(b && (b.pressed || b.value > 0.5)); }
-                  function poll() {
-                    var pads = []; try { pads = navigator.getGamepads ? navigator.getGamepads() : []; } catch (e) {}
-                    for (var i = 0; i < pads.length; i++) {
-                      var gp = pads[i]; if (!gp) continue;
-                      if (!seen) { seen = true; log('top frame sees gamepad: ' + gp.id); }
-                      if (!exiting && pressed(gp, 6) && pressed(gp, 7) && pressed(gp, 10) && pressed(gp, 11)) {
-                        exiting = true; log('exit combo'); flush();
-                        // Quit the game on the gaming PC, not just the stream.
-                        try { JellyEmu.fetch('/jellyemu/stream/quit' + deviceQuery, { method: 'POST', keepalive: true }).catch(function () {}); } catch (e) {}
-                        leave();
-                        setTimeout(function () { exiting = false; }, 3000); // allow a retry if navigation failed
-                      }
-                    }
-                    requestAnimationFrame(poll);
-                  }
-                  requestAnimationFrame(poll);
-                  setTimeout(function () { if (!seen) log('top frame sees no gamepad after 10s'); }, 10000);
-                })();
-                </script>
+                <iframe id="je-stream" allow="gamepad *; autoplay *; fullscreen *; keyboard-map *" allowfullscreen></iframe>
+                <script>window.JE_STREAM = {{config}};</script>
+                <script src="{{baseUrl}}/jellyemu/assets/jellyemu.utils.js"></script>
+                <script src="{{baseUrl}}/jellyemu/assets/streamhost.js"></script>
                 </body>
                 </html>
                 """;

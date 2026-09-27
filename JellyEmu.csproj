@@ -58,6 +58,7 @@
     <EmbeddedResource Include="Web/play.save.js" />
     <EmbeddedResource Include="Web/play.setting.js" />
     <EmbeddedResource Include="Web/jellyemu.utils.js" />
+    <EmbeddedResource Include="Web/stream/*.js" />
     <!-- Frontend Injection Modules -->
     <EmbeddedResource Include="Web/Injection/*" />
     <!-- Resources -->
