@@ -13,6 +13,12 @@
 (function () {
     'use strict';
 
+    // Use the Jellyfin theme's accent colour for the highlight (handed over by the UI's startGame).
+    try {
+        var accent = localStorage.getItem('jellyemu-accent');
+        if (accent && /^[#a-z0-9(),.\s%-]+$/i.test(accent)) document.documentElement.style.setProperty('--je-accent', accent);
+    } catch (e) { /* ignore */ }
+
     var FOCUSABLE = 'button, input, select, textarea, a[href], .je-tab, [tabindex]:not([tabindex="-1"])';
     var TEXT_INPUT = /^(text|search|email|url|password|number|)$/i;
     var REPEAT_DELAY_MS = 400;

@@ -101,10 +101,22 @@ namespace JellyEmu.Controllers
             if (!status.Available)
                 return Conflict(new { message = $"{target.Name}: {status.Reason}." });
 
-            // Every game uses the same Sunshine app, so a different game still running would be
-            // resumed instead of starting the new one: quit it first.
-            if (probe == Probe.Busy && current?.ItemId != itemId)
+            // Every game uses the same Sunshine app, so a game still running would be resumed
+            // instead of starting fresh. Only resume your own game; quit anything else first
+            // (another game, or someone else's session of the same game).
+            if (probe == Probe.Busy && (current?.ItemId != itemId || current?.UserId != userId))
                 await QuitRunningGame(target).ConfigureAwait(false);
+
+            // Reserve the PC now, so two people pressing Play at once can't both get it.
+            WriteCurrent(target.Id, new CurrentGame
+            {
+                ItemId = itemId,
+                UserId = userId,
+                Name = item.Name,
+                Platform = ResolvePlatformTag(item),
+                Path = item.Path ?? string.Empty,
+                LastSeen = now
+            });
 
             var pass = new JellyEmuStreamAuth.Claims("pass", userId, itemId, target.HostId, target.AppId,
                 now.Add(JellyEmuStreamAuth.PassLifetime).ToUnixTimeSeconds(), JellyEmuStreamAuth.NewNonce());
@@ -175,6 +187,19 @@ namespace JellyEmu.Controllers
                 Logger.LogWarning("[JellyEmu] Stream request refused (not allowed for streaming): {Method} {Uri} user {UserId}",
                     SanitizeForLog(method), SanitizeForLog(uri), SanitizeForLog(session.UserId));
                 return StatusCode(StatusCodes.Status403Forbidden);
+            }
+            // Starting (or reconnecting) the stream itself also needs the session to be the PC's
+            // current reservation, so an older session cookie can't bypass "one player per PC".
+            if (JellyEmuStreamAuth.IsStreamConnection(uri))
+            {
+                var device = ReadSettings()?.Devices.FirstOrDefault(d => d.HostId == session.HostId);
+                var current = device == null ? null : ReadCurrent(device.Id);
+                if (current == null || current.UserId != session.UserId || current.ItemId != session.ItemId
+                    || DateTimeOffset.UtcNow - current.LastSeen >= JellyEmuStreamDevices.BusyWindow)
+                {
+                    Logger.LogWarning("[JellyEmu] Stream connection refused: session is not the current player of {Device}", SanitizeForLog(device?.Id));
+                    return StatusCode(StatusCodes.Status403Forbidden);
+                }
             }
             Response.Headers[JellyEmuStreamAuth.UserHeader] = BridgeUser;
             return Ok();
@@ -254,11 +279,11 @@ namespace JellyEmu.Controllers
         public async Task<IActionResult> Save()
         {
             if (!LauncherKeyValid()) return Unauthorized();
-            var target = FindDevice(Request.Headers["X-JellyEmu-Device"].ToString());
-            var current = target == null ? null : ReadCurrent(target.Id);
-            if (current == null || !IsValidId(current.ItemId) || !IsValidId(current.UserId)) return NotFound();
+            var owner = SaveOwner();
+            if (owner == null) return NotFound();
+            var (userId, itemId, device) = owner.Value;
 
-            var path = GetSramPath(current.UserId, current.ItemId, AutoSaveSlot);
+            var path = GetSramPath(userId, itemId, AutoSaveSlot);
             if (HttpMethods.IsGet(Request.Method))
             {
                 if (!System.IO.File.Exists(path)) return NotFound();
@@ -274,11 +299,33 @@ namespace JellyEmu.Controllers
                 return BadRequest("Save is empty.");
             }
             System.IO.File.Move(temp, path, overwrite: true);
-            CacheService.Evict(JellyEmuCacheKeys.Sram(current.ItemId, current.UserId, AutoSaveSlot));
-            CacheService.Evict(JellyEmuCacheKeys.SaveSlots(current.ItemId, current.UserId));
-            Logger.LogInformation("[JellyEmu] Saved {Name} from {Device} ({Bytes} bytes)",
-                SanitizeForLog(current.Name), SanitizeForLog(target!.Id), new FileInfo(path).Length);
+            CacheService.Evict(JellyEmuCacheKeys.Sram(itemId, userId, AutoSaveSlot));
+            CacheService.Evict(JellyEmuCacheKeys.SaveSlots(itemId, userId));
+            Logger.LogInformation("[JellyEmu] Saved {Name} for user {UserId} from {Device} ({Bytes} bytes)",
+                SanitizeForLog(LibraryManager.GetItemById(itemId)?.Name), SanitizeForLog(userId), SanitizeForLog(device), new FileInfo(path).Length);
             return NoContent();
+        }
+
+        /// <summary>
+        /// Whose save a launcher request is about: the player and game it names (X-JellyEmu-Player,
+        /// X-JellyEmu-Item, from its own launch info), else the PC's current player and game. Naming
+        /// them means a late upload can never land in the next player's saves.
+        /// </summary>
+        private (string UserId, string ItemId, string Device)? SaveOwner()
+        {
+            var target = FindDevice(Request.Headers["X-JellyEmu-Device"].ToString());
+            if (target == null) return null;
+            var userId = Request.Headers["X-JellyEmu-Player"].ToString();
+            var itemId = Request.Headers["X-JellyEmu-Item"].ToString();
+            if (string.IsNullOrEmpty(userId) || string.IsNullOrEmpty(itemId))
+            {
+                var current = ReadCurrent(target.Id);
+                if (current == null) return null;
+                userId = current.UserId;
+                itemId = current.ItemId;
+            }
+            if (!IsValidId(userId) || !IsValidId(itemId) || LibraryManager.GetItemById(itemId) == null) return null;
+            return (userId, itemId, target.Id);
         }
 
         // The browser emulator's automatic in-game save slot (see Web/ejs.save.js AUTO_SRAM_SLOT).
@@ -301,11 +348,11 @@ namespace JellyEmu.Controllers
         {
             if (!LauncherKeyValid()) return Unauthorized();
             if (!SaveSets.Contains(name)) return NotFound();
-            var target = FindDevice(Request.Headers["X-JellyEmu-Device"].ToString());
-            var current = target == null ? null : ReadCurrent(target.Id);
-            if (current == null || !IsValidId(current.UserId)) return NotFound();
+            var owner = SaveOwner();
+            if (owner == null) return NotFound();
+            var (userId, _, device) = owner.Value;
 
-            var dir = Path.Combine(GetSafeUserSavesDir(current.UserId), "savesets");
+            var dir = Path.Combine(GetSafeUserSavesDir(userId), "savesets");
             Directory.CreateDirectory(dir);
             var path = Path.Combine(dir, name + ".zip");
             if (HttpMethods.IsGet(Request.Method))
@@ -324,7 +371,7 @@ namespace JellyEmu.Controllers
             }
             System.IO.File.Move(temp, path, overwrite: true);
             Logger.LogInformation("[JellyEmu] Saved {Set} for user {UserId} from {Device} ({Bytes} bytes)",
-                name, SanitizeForLog(current.UserId), SanitizeForLog(target!.Id), new FileInfo(path).Length);
+                name, SanitizeForLog(userId), SanitizeForLog(device), new FileInfo(path).Length);
             return NoContent();
         }
 
@@ -414,6 +461,21 @@ namespace JellyEmu.Controllers
         /// <summary>Platforms streamed from a gaming PC instead of played in the browser.</summary>
         internal static bool IsStreamedPlatform(IApplicationPaths appPaths, string platform) =>
             ReadSettings(appPaths)?.Devices.Any(d => d.Supports(platform)) == true;
+
+        // Platforms the browser can't play (in-browser emulation missing or too slow). Mirrors
+        // ejsUnsupportedPlatforms in Web/Injection/core.js plus TOO_SLOW_IN_BROWSER in picker.js.
+        private static readonly HashSet<string> BrowserUnplayable = new(StringComparer.OrdinalIgnoreCase)
+        {
+            "PlayStation 2", "Dreamcast", "PlayStation 3", "Xbox", "Xbox 360",
+            "GameCube", "Wii", "Wii U", "Nintendo Switch", "PlayStation Vita"
+        };
+
+        /// <summary>
+        /// For launches that bypass the "Play on" picker (no device chosen): stream only platforms
+        /// the browser can't play; everything else keeps playing in the browser as before.
+        /// </summary>
+        internal static bool StreamsWithoutPicker(IApplicationPaths appPaths, string platform) =>
+            BrowserUnplayable.Contains(platform) && IsStreamedPlatform(appPaths, platform);
 
         private JellyEmuStreamDevices.Settings? ReadSettings() => ReadSettings(AppPaths);
 

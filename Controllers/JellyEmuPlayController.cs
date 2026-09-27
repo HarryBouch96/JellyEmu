@@ -47,14 +47,14 @@ namespace JellyEmu.Controllers
 
             // EXPERIMENT (experiment/game-streaming): "device" comes from the "Play on" picker:
             // "local" plays in this browser, anything else streams from that gaming PC. Without it,
-            // platforms a gaming PC streams go there (e.g. launches that bypass the picker).
+            // platforms the browser can't play stream from a gaming PC (launches that bypass the picker).
             if (!string.IsNullOrEmpty(device) && !string.Equals(device, "local", StringComparison.OrdinalIgnoreCase))
             {
                 if (device.Length > 32 || !device.All(c => char.IsAsciiLetterOrDigit(c) || c == '-'))
                     return BadRequest("Invalid device.");
                 return StreamTest(itemId, device);
             }
-            if (string.IsNullOrEmpty(device) && JellyEmuStreamController.IsStreamedPlatform(AppPaths, ResolvePlatformTag(item)))
+            if (string.IsNullOrEmpty(device) && JellyEmuStreamController.StreamsWithoutPicker(AppPaths, ResolvePlatformTag(item)))
                 return StreamTest(itemId, string.Empty);
 
             var resolvedCore = ResolveCore(item, userId, core);

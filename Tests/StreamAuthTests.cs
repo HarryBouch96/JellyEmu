@@ -77,6 +77,10 @@ namespace JellyEmu.Tests
         [InlineData("PATCH", "/api/role")]
         [InlineData("POST", "/stream.html")]
         [InlineData("GET", "/stream/../admin.html")]
+        [InlineData("GET", "/api%2Fusers")]
+        [InlineData("GET", "/api%2fhosts")]
+        [InlineData("GET", "/%61pi/users")]
+        [InlineData("GET", "/api\\users")]
         public void IsAllowedRequest_BlocksManagement(string method, string uri)
         {
             Assert.False(JellyEmuStreamAuth.IsAllowedRequest(method, uri));

@@ -75,7 +75,9 @@ namespace JellyEmu.Services
         public static bool IsAllowedRequest(string method, string pathAndQuery)
         {
             var path = pathAndQuery.Split('?', 2)[0];
-            if (path.Contains("..", StringComparison.Ordinal)) return false;
+            // No encoded characters or backslashes: they could disguise a path (e.g. "/api%2Fusers")
+            // from these checks, and the stream page never needs them.
+            if (path.Contains("..", StringComparison.Ordinal) || path.Contains('%') || path.Contains('\\')) return false;
             var get = string.Equals(method, "GET", StringComparison.OrdinalIgnoreCase)
                    || string.Equals(method, "HEAD", StringComparison.OrdinalIgnoreCase);
 
@@ -91,6 +93,10 @@ namespace JellyEmu.Services
             if (!get) return false;
             return !BlockedPages.Any(p => path.Equals(p, StringComparison.OrdinalIgnoreCase));
         }
+
+        /// <summary>The bridge's stream connection (a WebSocket), which starts or resumes a game.</summary>
+        public static bool IsStreamConnection(string pathAndQuery) =>
+            pathAndQuery.Split('?', 2)[0].Equals("/api/host/stream", StringComparison.OrdinalIgnoreCase);
 
         private static string B64(byte[] bytes) =>
             Convert.ToBase64String(bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_');

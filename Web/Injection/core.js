@@ -116,6 +116,11 @@
 
     JE.startGame = function(itemId, slot, device) {
         console.log('[JellyEmu] Launching', itemId, 'on', device);
+        // Hand the theme's accent colour to the game page (a separate page without Jellyfin's CSS).
+        try {
+            var accent = getComputedStyle(document.documentElement).getPropertyValue('--jf-palette-primary-main').trim();
+            if (accent) localStorage.setItem('jellyemu-accent', accent);
+        } catch (e) { /* ignore */ }
         var userId = window.ApiClient ? window.ApiClient.getCurrentUserId() : '';
         var playUrl = JE.getUrl('/jellyemu/play/' + itemId + (userId ? '?userId=' + userId : ''));
         if (slot) {

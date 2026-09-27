@@ -30,7 +30,9 @@
             border: 2px solid transparent; border-radius: 12px; background: rgba(255,255,255,.06); color: #fff; font: inherit;
             text-align: left; cursor: pointer; outline: none; transition: background .12s, border-color .12s, transform .12s; }
         .jellyemu-picker-option:hover:not([aria-disabled="true"]) { background: rgba(255,255,255,.1); }
-        .jellyemu-picker-option.je-focus { border-color: #00a4dc; background: rgba(0,164,220,.16); transform: scale(1.015); }
+        .jellyemu-picker { --je-accent: var(--jf-palette-primary-main, #00a4dc); }
+        .jellyemu-picker-option.je-focus { border-color: var(--je-accent); background: rgba(0,164,220,.16);
+            background: color-mix(in srgb, var(--je-accent) 18%, transparent); transform: scale(1.015); }
         .jellyemu-picker-option[aria-disabled="true"] { cursor: default; }
         .jellyemu-picker-option[aria-disabled="true"] .jellyemu-picker-icon,
         .jellyemu-picker-option[aria-disabled="true"] .jellyemu-picker-name { opacity: .45; }
@@ -45,7 +47,7 @@
         .jellyemu-picker-cancel { display: block; margin: 16px auto 0; padding: 10px 26px; border: 2px solid transparent; border-radius: 999px;
             background: transparent; color: rgba(255,255,255,.75); font: inherit; cursor: pointer; outline: none; }
         .jellyemu-picker-cancel:hover { color: #fff; background: rgba(255,255,255,.08); }
-        .jellyemu-picker-cancel.je-focus { color: #fff; border-color: #00a4dc; }
+        .jellyemu-picker-cancel.je-focus { color: #fff; border-color: var(--je-accent); }
     `;
 
     // Navigation keys: arrows, Enter/Space, Escape/Backspace, plus the gamepad key codes some

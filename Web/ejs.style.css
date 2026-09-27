@@ -1367,10 +1367,12 @@ canvas.ejs_canvas,
 }
 
 /* Controller menu (ejs.menu.js) */
+/* --je-accent: the Jellyfin theme's accent, handed over by the UI when a game starts (ejs.menu.js). */
 .je-gp-focus {
-    outline: 3px solid #00a4dc !important;
+    outline: 3px solid var(--je-accent, #00a4dc) !important;
     outline-offset: 2px;
     box-shadow: 0 0 12px rgba(0, 164, 220, .6) !important;
+    box-shadow: 0 0 12px color-mix(in srgb, var(--je-accent, #00a4dc) 60%, transparent) !important;
 }
 
 #je-gp-hint {

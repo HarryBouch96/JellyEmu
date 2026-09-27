@@ -80,6 +80,28 @@ namespace JellyEmu.Tests
         }
 
         [Fact]
+        public void LaunchWithoutPicker_StreamsOnlyWhatTheBrowserCantPlay()
+        {
+            var dir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "jellyemu-devices-" + Guid.NewGuid().ToString("N"));
+            System.IO.Directory.CreateDirectory(dir);
+            try
+            {
+                System.IO.File.WriteAllText(System.IO.Path.Combine(dir, "jellyemu-stream.json"),
+                    "{\"devices\":[{\"id\":\"laptop\",\"name\":\"Gaming laptop\",\"streamOrigin\":\"https://stream.example\"," +
+                    "\"bridgeUrl\":\"http://pc:8080\",\"hostId\":1,\"appId\":2,\"platforms\":[\"PlayStation 2\",\"Game Boy Advance\"]}]}");
+                var appPaths = new MockAppPaths(dir);
+
+                Assert.True(JellyEmu.Controllers.JellyEmuStreamController.StreamsWithoutPicker(appPaths, "PlayStation 2"));
+                Assert.False(JellyEmu.Controllers.JellyEmuStreamController.StreamsWithoutPicker(appPaths, "Game Boy Advance"));
+                Assert.False(JellyEmu.Controllers.JellyEmuStreamController.StreamsWithoutPicker(appPaths, "GameCube")); // no PC offers it
+            }
+            finally
+            {
+                System.IO.Directory.Delete(dir, true);
+            }
+        }
+
+        [Fact]
         public void QuitStream_IsFreeImmediately()
         {
             // Quitting sets LastSeen to the minimum, so the PC is free straight away.
