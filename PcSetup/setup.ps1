@@ -550,8 +550,15 @@ Write-Text (Join-Path $sunshineData 'apps.json') ($apps | ConvertTo-Json -Depth 
 # Web API login, used once below to pair the bridge. New random password on every setup run.
 $sunshineUser = 'jellyemu'
 $sunshinePassword = [Convert]::ToBase64String((1..24 | ForEach-Object { [byte](Get-Random -Maximum 256) }))
+# (sunshine.exe --creds can crash while exiting, after saving the login. No crash dialog for that:
+# the error mode is inherited by programs this script starts.)
+if (-not ('JeErrorMode' -as [type])) {
+    Add-Type -Name JeErrorMode -Namespace '' -MemberDefinition '[DllImport("kernel32.dll")] public static extern uint SetErrorMode(uint mode);'
+}
+$previousMode = [JeErrorMode]::SetErrorMode(0x8003)   # no critical-error, crash or open-file dialogs
 Push-Location $sunshineDir
-try { & (Join-Path $sunshineDir 'sunshine.exe') --creds $sunshineUser $sunshinePassword | Out-Null } finally { Pop-Location }
+try { & (Join-Path $sunshineDir 'sunshine.exe') --creds $sunshineUser $sunshinePassword | Out-Null }
+finally { Pop-Location; [JeErrorMode]::SetErrorMode($previousMode) | Out-Null }
 
 if (-not $service) {
     sc.exe create $serviceName binPath= "`"$(Join-Path $sunshineDir 'tools\sunshinesvc.exe')`"" start= auto DisplayName= 'Sunshine (JellyEmu games)' | Out-Null
