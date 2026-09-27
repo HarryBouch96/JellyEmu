@@ -45,6 +45,38 @@ public static class JeDriver
     [DllImport("newdev.dll", SetLastError = true, CharSet = CharSet.Unicode)]
     static extern bool UpdateDriverForPlugAndPlayDevices(IntPtr hwndParent, string hardwareId, string infPath, int flags, out bool rebootRequired);
 
+    static Exception Failed(string call)
+    {
+        int code = Marshal.GetLastWin32Error();
+        return new InvalidOperationException(string.Format("{0} failed: 0x{1:X8} {2}", call, code, new Win32Exception(code).Message));
+    }
+
+    /// <summary>
+    /// Creates a root-enumerated device with this hardware id (no driver yet: install one with
+    /// pnputil /add-driver ... /install, which picks it up by the id).
+    /// </summary>
+    public static void CreateRootDevice(string hardwareId, string className, Guid classGuid)
+    {
+        IntPtr set = SetupDiCreateDeviceInfoList(ref classGuid, IntPtr.Zero);
+        if (set == new IntPtr(-1)) throw Failed("SetupDiCreateDeviceInfoList");
+        try
+        {
+            var data = new SP_DEVINFO_DATA();
+            data.cbSize = Marshal.SizeOf(typeof(SP_DEVINFO_DATA));
+            if (!SetupDiCreateDeviceInfo(set, className, ref classGuid, null, IntPtr.Zero, DICD_GENERATE_ID, ref data))
+                throw Failed("SetupDiCreateDeviceInfo");
+            byte[] ids = Encoding.Unicode.GetBytes(hardwareId + "\0\0");
+            if (!SetupDiSetDeviceRegistryProperty(set, ref data, SPDRP_HARDWAREID, ids, ids.Length))
+                throw Failed("SetupDiSetDeviceRegistryProperty");
+            if (!SetupDiCallClassInstaller(DIF_REGISTERDEVICE, set, ref data))
+                throw Failed("SetupDiCallClassInstaller");
+        }
+        finally
+        {
+            SetupDiDestroyDeviceInfoList(set);
+        }
+    }
+
     /// <summary>
     /// Creates a root device with this hardware id and installs the driver from the .inf onto it.
     /// Returns true if Windows says a restart is needed.

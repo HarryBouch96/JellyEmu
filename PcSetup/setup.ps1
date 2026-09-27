@@ -39,6 +39,10 @@ function Warn([string]$m) { Write-Host "   ! $m" -ForegroundColor Yellow; $scrip
 $warnings = @()
 
 # ---- Administrator ----------------------------------------------------------------------------
+if (-not [Environment]::Is64BitProcess) {
+    # 32-bit PowerShell can't install drivers on 64-bit Windows.
+    throw 'Run this in the normal (64-bit) Windows PowerShell, not "Windows PowerShell (x86)".'
+}
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $isAdmin -and -not $Stage) {
     if (-not $PSCommandPath) { throw 'Save this script to a file and run it from there (it needs to restart itself as administrator).' }
@@ -411,10 +415,27 @@ if (-not (Get-Service ViGEmBus -ErrorAction SilentlyContinue)) {
     if ($p.ExitCode -notin 0, 3010) { throw "ViGEmBus setup failed (exit code $($p.ExitCode))" }
 } else { Say 'ViGEmBus is already installed' }
 
-function Get-VirtualDisplay { Get-PnpDevice -Class Display -ErrorAction SilentlyContinue | Where-Object { $_.HardwareID -contains $vddHardwareId } | Select-Object -First 1 }
-$vdd = Get-VirtualDisplay
-if (-not $vdd) {
-    Say 'Installing the Virtual Display Driver (a monitor only the stream shows). Windows may ask you to confirm.'
+if (-not ('JeDriver' -as [type])) {
+    Invoke-WebRequest -Uri "$Server/jellyemu/stream/pc/file/DeviceSetup.cs" -OutFile (Join-Path $jeDir 'DeviceSetup.cs') -UseBasicParsing
+    Add-Type -Path (Join-Path $jeDir 'DeviceSetup.cs')
+}
+
+# Virtual Display Driver devices, working ones first. (A failed earlier attempt can leave a device
+# with no driver behind; it's reused rather than adding another.)
+function Get-VirtualDisplays {
+    @(Get-PnpDevice -ErrorAction SilentlyContinue | Where-Object { $_.HardwareID -contains $vddHardwareId } | Sort-Object { $_.Status -ne 'OK' })
+}
+function Test-HasDriver($device) {
+    [bool](Get-PnpDeviceProperty -InstanceId $device.InstanceId -KeyName DEVPKEY_Device_DriverInfPath -ErrorAction SilentlyContinue).Data
+}
+
+$vdd = Get-VirtualDisplays | Select-Object -First 1
+if ($vdd -and (Test-HasDriver $vdd)) {
+    Say 'The Virtual Display Driver is already installed'
+} else {
+    Say 'Installing the Virtual Display Driver (a monitor only the stream shows).'
+    Say 'Windows will ask "Would you like to install this device software?" (publisher: SignPath Foundation): choose Install.'
+    Say '(If you don''t see it, check the taskbar: it can open behind this window.)'
     $vddDir = Join-Path $jeDir 'vdd'
     Remove-Item -LiteralPath $vddDir -Recurse -Force -ErrorAction SilentlyContinue
     Add-Type -AssemblyName System.IO.Compression.FileSystem
@@ -425,17 +446,27 @@ if (-not $vdd) {
         New-Item -ItemType Directory -Force -Path 'C:\VirtualDisplayDriver' | Out-Null
         Copy-Item -LiteralPath (Join-Path $inf.DirectoryName 'vdd_settings.xml') -Destination 'C:\VirtualDisplayDriver\vdd_settings.xml'
     }
-    Invoke-WebRequest -Uri "$Server/jellyemu/stream/pc/file/DeviceSetup.cs" -OutFile (Join-Path $jeDir 'DeviceSetup.cs') -UseBasicParsing
-    Add-Type -Path (Join-Path $jeDir 'DeviceSetup.cs')
-    if ([JeDriver]::InstallRootDevice($inf.FullName, $vddHardwareId, 'Display', $displayClass)) { Warn 'Windows wants a restart to finish installing the display driver. Restart, then run this setup again.' }
-    for ($i = 0; $i -lt 30 -and -not ($vdd = Get-VirtualDisplay); $i++) { Start-Sleep -Seconds 1 }
-    if (-not $vdd) { throw 'The Virtual Display Driver didn''t appear after installing it' }
-} else { Say 'The Virtual Display Driver is already installed' }
-if ($vdd.Status -ne 'OK') { Enable-PnpDevice -InstanceId $vdd.InstanceId -Confirm:$false }
-if (-not ('JeHttp' -as [type])) {
-    Invoke-WebRequest -Uri "$Server/jellyemu/stream/pc/file/DeviceSetup.cs" -OutFile (Join-Path $jeDir 'DeviceSetup.cs') -UseBasicParsing
-    Add-Type -Path (Join-Path $jeDir 'DeviceSetup.cs')
+    # The device (like devcon install), then Windows' own driver install onto it. The driver is
+    # signed by the SignPath Foundation, so Windows asks once whether to trust that publisher.
+    if (-not $vdd) { [JeDriver]::CreateRootDevice($vddHardwareId, 'Display', $displayClass) }
+    $out = pnputil /add-driver "$($inf.FullName)" /install 2>&1 | Out-String
+    $code = $LASTEXITCODE
+    for ($i = 0; $i -lt 15 -and -not (($vdd = Get-VirtualDisplays | Select-Object -First 1) -and (Test-HasDriver $vdd)); $i++) { Start-Sleep -Seconds 1 }
+    if (-not ($vdd -and (Test-HasDriver $vdd))) {
+        # Windows' driver install log says why (the last part about this driver).
+        $logLines = @(Get-Content -LiteralPath "$env:WINDIR\INF\setupapi.dev.log" -Tail 400 -ErrorAction SilentlyContinue)
+        $start = 0
+        for ($i = $logLines.Count - 1; $i -ge 0; $i--) { if ($logLines[$i] -match '^>>>\s+\[' -and ($logLines[$i..([Math]::Min($i + 3, $logLines.Count - 1))] -join ' ') -match 'mttvdd') { $start = $i; break } }
+        Write-Host ($logLines[$start..($logLines.Count - 1)] | Where-Object { $_ -match '!!!|!\s|fail|error|denied|sign|trust|publisher|>>>|<<<' } | Select-Object -Last 25 | Out-String)
+        throw "The Virtual Display Driver didn't install (pnputil exit code $code): $($out.Trim())"
+    }
+    if ($code -eq 3010) { Warn 'Windows wants a restart to finish installing the display driver. Restart, then run this setup again.' }
+    Say 'Installed the Virtual Display Driver'
 }
+# Extra driverless devices left by failed attempts.
+Get-VirtualDisplays | Where-Object { $_.InstanceId -ne $vdd.InstanceId -and -not (Test-HasDriver $_) } |
+    ForEach-Object { pnputil /remove-device $_.InstanceId | Out-Null }
+if ($vdd.Status -ne 'OK') { Enable-PnpDevice -InstanceId $vdd.InstanceId -Confirm:$false }
 
 # ---- Games Sunshine ---------------------------------------------------------------------------
 Step 'Sunshine (games only)'
