@@ -27,6 +27,7 @@ namespace JellyEmu.Controllers
     ///   POST /jellyemu/stream/heartbeat?device=          - the stream page is still open
     ///   POST /jellyemu/stream/quit?device=               - quit the game on that PC
     ///   GET  /jellyemu/stream/launch                     - a PC's launcher asks which game to start
+    ///   GET/POST /jellyemu/stream/save                   - that launcher syncs the game's in-game save
     ///   GET  /jellyemu/stream/platforms                  - platforms any PC can stream (UI shows Play)
     /// Settings: {DataPath}/jellyemu-stream.json. Launcher key: {DataPath}/jellyemu-launcher.key.
     /// </summary>
@@ -77,7 +78,7 @@ namespace JellyEmu.Controllers
                     current?.LastSeen ?? DateTimeOffset.MinValue, userId, DateTimeOffset.UtcNow);
                 result.Add(new { id = device.Id, name = device.Name, available = status.Available, reason = status.Reason });
             }
-            return Ok(new { platform, devices = result });
+            return Ok(new { platform, name = item.Name, devices = result });
         }
 
         [HttpPost("/jellyemu/stream/pass/{itemId}")]
@@ -230,19 +231,64 @@ namespace JellyEmu.Controllers
         [AllowAnonymous]
         public IActionResult Launch()
         {
-            var expected = ReadLauncherKey();
-            var given = Request.Headers["X-JellyEmu-Launcher-Key"].ToString();
-            if (expected == null || !CryptographicOperations.FixedTimeEquals(Encoding.UTF8.GetBytes(given), Encoding.UTF8.GetBytes(expected)))
-            {
-                Logger.LogWarning("[JellyEmu] Launcher request refused: bad key");
-                return Unauthorized();
-            }
+            if (!LauncherKeyValid()) return Unauthorized();
             var target = FindDevice(Request.Headers["X-JellyEmu-Device"].ToString());
             var current = target == null ? null : ReadCurrent(target.Id);
             if (current == null) return NotFound();
             Logger.LogInformation("[JellyEmu] Launcher on {Device} starting {Name} ({Platform})",
                 SanitizeForLog(target!.Id), SanitizeForLog(current.Name), SanitizeForLog(current.Platform));
             return Ok(new { itemId = current.ItemId, name = current.Name, platform = current.Platform, path = current.Path });
+        }
+
+        /// <summary>
+        /// The in-game (battery) save of the game currently on this gaming PC, for whoever is playing
+        /// it: the same automatic slot the browser emulator uses, so saves carry over both ways.
+        /// GET fetches it (404 when there is none); POST stores a new one. Launcher key required.
+        /// </summary>
+        [HttpGet("/jellyemu/stream/save")]
+        [HttpPost("/jellyemu/stream/save")]
+        [AllowAnonymous]
+        [DisableRequestSizeLimit]
+        public async Task<IActionResult> Save()
+        {
+            if (!LauncherKeyValid()) return Unauthorized();
+            var target = FindDevice(Request.Headers["X-JellyEmu-Device"].ToString());
+            var current = target == null ? null : ReadCurrent(target.Id);
+            if (current == null || !IsValidId(current.ItemId) || !IsValidId(current.UserId)) return NotFound();
+
+            var path = GetSramPath(current.UserId, current.ItemId, AutoSaveSlot);
+            if (HttpMethods.IsGet(Request.Method))
+            {
+                if (!System.IO.File.Exists(path)) return NotFound();
+                return PhysicalFile(path, "application/octet-stream");
+            }
+
+            var temp = path + ".tmp";
+            using (var fs = System.IO.File.Create(temp))
+                await Request.Body.CopyToAsync(fs, HttpContext.RequestAborted).ConfigureAwait(false);
+            if (new FileInfo(temp).Length < 8)
+            {
+                System.IO.File.Delete(temp);
+                return BadRequest("Save is empty.");
+            }
+            System.IO.File.Move(temp, path, overwrite: true);
+            CacheService.Evict(JellyEmuCacheKeys.Sram(current.ItemId, current.UserId, AutoSaveSlot));
+            CacheService.Evict(JellyEmuCacheKeys.SaveSlots(current.ItemId, current.UserId));
+            Logger.LogInformation("[JellyEmu] Saved {Name} from {Device} ({Bytes} bytes)",
+                SanitizeForLog(current.Name), SanitizeForLog(target!.Id), new FileInfo(path).Length);
+            return NoContent();
+        }
+
+        // The browser emulator's automatic in-game save slot (see Web/ejs.save.js AUTO_SRAM_SLOT).
+        private const int AutoSaveSlot = 100;
+
+        private bool LauncherKeyValid()
+        {
+            var expected = ReadLauncherKey();
+            var given = Request.Headers["X-JellyEmu-Launcher-Key"].ToString();
+            var ok = expected != null && CryptographicOperations.FixedTimeEquals(Encoding.UTF8.GetBytes(given), Encoding.UTF8.GetBytes(expected));
+            if (!ok) Logger.LogWarning("[JellyEmu] Launcher request refused: bad key");
+            return ok;
         }
 
         /// <summary>Asks the PC's bridge whether its Sunshine is reachable and free. Cached briefly.</summary>

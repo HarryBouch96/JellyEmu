@@ -175,7 +175,7 @@
         if (on && !hint) {
             hint = document.createElement('div');
             hint.id = 'je-gp-hint';
-            hint.textContent = 'D-pad: move  ·  A: select  ·  B: back  ·  LT+RT+L3+R3: close';
+            hint.textContent = 'Game paused';
             document.body.appendChild(hint);
         }
         if (hint) hint.style.display = on ? '' : 'none';

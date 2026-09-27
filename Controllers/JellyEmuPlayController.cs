@@ -104,7 +104,7 @@ namespace JellyEmu.Controllers
                   function log(m) {
                     var l = ((Date.now() - t0) / 1000).toFixed(1) + 's ' + m;
                     lines.push(l); unsent.push(l);
-                    dbg.textContent = 'JellyEmu stream test - LT+RT+L3+R3 to exit\n' + lines.slice(-12).join('\n');
+                    dbg.textContent = 'JellyEmu stream diagnostics\n' + lines.slice(-12).join('\n');
                   }
                   function flush() {
                     if (!unsent.length || !window.JellyEmu) return;
@@ -131,12 +131,27 @@ namespace JellyEmu.Controllers
                     .then(function (d) { log('pass received'); f.src = d.url; })
                     .catch(function (e) { showMessage(e.message); log('no stream: ' + e.message); flush(); });
 
+                  // Back to the game's page. Step back rather than loading it again, so the page
+                  // isn't in the history twice (which made "back" need two presses afterwards).
+                  // The iframe is removed first so its own history can't swallow the step.
+                  function leave() {
+                    if (f.parentNode) f.parentNode.removeChild(f);
+                    var here = location.href;
+                    if (history.length > 1) history.back();
+                    setTimeout(function () { if (location.href === here) location.replace(exitUrl); }, 1500);
+                  }
+
                   function showMessage(text) {
                     var m = document.createElement('div');
-                    m.textContent = text + ' Press B to go back.';
+                    m.textContent = text;
                     m.style.cssText = 'position:fixed;inset:0;display:flex;align-items:center;justify-content:center;color:#fff;font:24px sans-serif;text-align:center;padding:40px';
                     document.body.appendChild(m);
-                    window.addEventListener('keydown', function () { location.replace(exitUrl); }, { once: true });
+                    // Returns by itself, or straight away on any key, button or tap.
+                    var done = false;
+                    function go() { if (!done) { done = true; leave(); } }
+                    setTimeout(go, 5000);
+                    window.addEventListener('keydown', go, { once: true });
+                    window.addEventListener('pointerdown', go, { once: true });
                   }
 
                   // Tell JellyEmu the stream is still open, so nobody else takes over the gaming PC.
@@ -154,13 +169,10 @@ namespace JellyEmu.Controllers
                       var gp = pads[i]; if (!gp) continue;
                       if (!seen) { seen = true; log('top frame sees gamepad: ' + gp.id); }
                       if (!exiting && pressed(gp, 6) && pressed(gp, 7) && pressed(gp, 10) && pressed(gp, 11)) {
-                        // Leave without history.back(): the iframe's own navigations share the
-                        // tab history, so "back" would only step the iframe (e.g. to its login page).
                         exiting = true; log('exit combo'); flush();
                         // Quit the game on the gaming PC, not just the stream.
                         try { JellyEmu.fetch('/jellyemu/stream/quit' + deviceQuery, { method: 'POST', keepalive: true }).catch(function () {}); } catch (e) {}
-                        if (f.parentNode) f.parentNode.removeChild(f);
-                        location.replace(exitUrl);
+                        leave();
                         setTimeout(function () { exiting = false; }, 3000); // allow a retry if navigation failed
                       }
                     }
