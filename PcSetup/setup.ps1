@@ -212,7 +212,8 @@ Say 'PCSX2, Dolphin and RetroArch are in place'
 $ps2Bios = $null
 $ps1Bios = $false
 if ($registered) {
-    $bios = @(Invoke-RestMethod -Uri "$Server/jellyemu/stream/pc/bios" -Headers $pcHeaders -TimeoutSec 30)
+    # (Windows PowerShell returns a JSON list as one object: unroll it into its items.)
+    $bios = @((Invoke-RestMethod -Uri "$Server/jellyemu/stream/pc/bios" -Headers $pcHeaders -TimeoutSec 30) | ForEach-Object { $_ })
     foreach ($b in $bios) {
         $dir = if ($b.system -eq 'PlayStation 2') { Join-Path $pcsx2 'bios' } else { Join-Path $retroarch 'system' }
         New-Item -ItemType Directory -Force -Path $dir | Out-Null
