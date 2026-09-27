@@ -189,7 +189,7 @@
 
         if (!wrap.querySelector('.jellyemu-platform-status-pill')) {
             const unknownTag  = JE.cachedTags.includes('Unknown');
-            const unsupported = !unknownTag && JE.cachedTags.some(t => JE.ejsUnsupportedPlatforms.has(t));
+            const unsupported = !unknownTag && JE.isUnsupported(JE.cachedTags);
             if (unknownTag || unsupported) {
                 const pill = document.createElement('div');
                 pill.className = 'mediaInfoItem jellyemu-platform-status-pill';
@@ -328,6 +328,17 @@
         if (JE.isPlayable(JE.cachedTags)) JE.injectPlayButton(page);
         JE.injectMiscInfo(page);
     };
+
+    // The list of streamed platforms arrives shortly after load; re-check the open game page.
+    if (JE.streamedPlatformsReady) {
+        JE.streamedPlatformsReady.then(function () {
+            if (!JE.currentItemIsGame || !JE.isStreamed(JE.cachedTags)) return;
+            var page = JE.getVisibleDetailPage();
+            if (!page) return;
+            page.querySelectorAll('.jellyemu-platform-status-pill').forEach(function (p) { p.remove(); });
+            JE.injectAll(page);
+        });
+    }
 
     JE.processItemDetails = function(id, page) {
         if (!window.ApiClient) return;

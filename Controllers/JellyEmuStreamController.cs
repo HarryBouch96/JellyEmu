@@ -23,6 +23,7 @@ namespace JellyEmu.Controllers
     ///   POST /jellyemu/stream/heartbeat     - the stream page is still open
     ///   POST /jellyemu/stream/quit          - quit the game on the gaming PC
     ///   GET  /jellyemu/stream/launch        - the gaming PC's launcher asks which game to start
+    ///   GET  /jellyemu/stream/platforms     - platforms that stream (the UI shows Play for them)
     /// Settings: {DataPath}/jellyemu-stream.json. Launcher key: {DataPath}/jellyemu-launcher.key.
     /// </summary>
     public class JellyEmuStreamController : JellyEmuBaseController
@@ -153,6 +154,14 @@ namespace JellyEmu.Controllers
             Response.Headers[JellyEmuStreamAuth.UserHeader] = BridgeUser;
             return Ok();
         }
+
+        /// <summary>
+        /// Platforms streamed from the gaming PC, so the UI shows Play for them. Anonymous because
+        /// the UI asks before the Jellyfin client is signed in; it only lists platform names.
+        /// </summary>
+        [HttpGet("/jellyemu/stream/platforms")]
+        [AllowAnonymous]
+        public IActionResult Platforms() => Ok(ReadSettings()?.Platforms ?? new List<string>());
 
         [HttpPost("/jellyemu/stream/heartbeat")]
         [Authorize]

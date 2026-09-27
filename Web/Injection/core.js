@@ -57,14 +57,37 @@
 
     JE.delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
+    // Platforms the server streams from a gaming PC (EXPERIMENT, game streaming). Games on
+    // these are playable even though the browser can't emulate them ("Unsupported" tag).
+    JE.streamedPlatforms = new Set();
+    JE.streamedPlatformsReady = fetch((function () {
+        var p = window.location.pathname || '', i = p.indexOf('/web');
+        return (i > 0 ? p.substring(0, i) : '') + '/jellyemu/stream/platforms';
+    })(), { headers: (function () {
+        try {
+            var t = window.ApiClient && window.ApiClient.accessToken && window.ApiClient.accessToken();
+            return t ? { 'Authorization': 'MediaBrowser Token="' + t + '"' } : {};
+        } catch (e) { return {}; }
+    })() }).then(function (r) { return r.ok ? r.json() : []; })
+      .then(function (list) { (list || []).forEach(function (p) { JE.streamedPlatforms.add(p); }); })
+      .catch(function () {});
+
+    JE.isStreamed = function(tags) {
+        return !!tags && tags.some(t => JE.streamedPlatforms.has(t));
+    };
+
+    /** True when the game can't be played: unknown or unsupported platform, and not streamed. */
+    JE.isUnsupported = function(tags) {
+        if (!tags) return false;
+        if (JE.isStreamed(tags)) return false;
+        return tags.some(t => JE.ejsUnsupportedPlatforms.has(t));
+    };
+
     JE.isPlayable = function(tags) {
         if (!tags || !tags.length) return false;
         if (!tags.includes('JellyEmu')) return false;
-        for (const tag of tags) {
-            if (tag === 'Unknown') return false;
-            if (JE.ejsUnsupportedPlatforms.has(tag)) return false;
-        }
-        return true;
+        if (tags.includes('Unknown')) return false;
+        return !JE.isUnsupported(tags);
     };
 
     JE.isDiscTag = function(tag) {

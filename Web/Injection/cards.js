@@ -127,7 +127,7 @@
                             const isRegion      = JE.knownRegions.has(tag);
                             const isDisc        = JE.isDiscTag(tag);
                             const isUnknown     = tag === 'Unknown';
-                            const isUnsupported = JE.ejsUnsupportedPlatforms.has(tag);
+                            const isUnsupported = JE.ejsUnsupportedPlatforms.has(tag) && !JE.isStreamed(item.Tags);
                             badge.style.cssText = 'font-size:9px;font-weight:700;letter-spacing:.03em;padding:1px 5px;border-radius:3px;opacity:.88;' +
                                 (isRegion
                                     ? 'background:rgba(0,164,220,.85);color:#fff;'
