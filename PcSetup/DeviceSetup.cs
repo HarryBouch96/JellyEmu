@@ -33,7 +33,9 @@ public static class JeDriver
     static extern bool SetupDiCreateDeviceInfo(IntPtr set, string deviceName, ref Guid classGuid, string description,
         IntPtr hwndParent, int flags, ref SP_DEVINFO_DATA data);
 
-    [DllImport("setupapi.dll", SetLastError = true)]
+    // Unicode: the W version. (Without it .NET calls the ANSI one, which reads the UTF-16 id as
+    // single letters, so the device's hardware id came out as "R", "o", "o", "t", ...)
+    [DllImport("setupapi.dll", SetLastError = true, CharSet = CharSet.Unicode)]
     static extern bool SetupDiSetDeviceRegistryProperty(IntPtr set, ref SP_DEVINFO_DATA data, int property, byte[] buffer, int size);
 
     [DllImport("setupapi.dll", SetLastError = true)]

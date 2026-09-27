@@ -429,6 +429,12 @@ function Test-HasDriver($device) {
     [bool](Get-PnpDeviceProperty -InstanceId $device.InstanceId -KeyName DEVPKEY_Device_DriverInfPath -ErrorAction SilentlyContinue).Data
 }
 
+# Devices made by an earlier version of this setup, whose hardware id came out as single letters
+# ("R", "o", "o", "t", ...): no driver can match them, so they're removed.
+Get-PnpDevice -ErrorAction SilentlyContinue |
+    Where-Object { $_.InstanceId -like 'ROOT\DISPLAY\*' -and @($_.HardwareID).Count -gt 1 -and (@($_.HardwareID) -join '') -eq $vddHardwareId -and -not (Test-HasDriver $_) } |
+    ForEach-Object { pnputil /remove-device $_.InstanceId | Out-Null; Say "Removed a broken display device left by an earlier attempt ($($_.InstanceId))" }
+
 $vdd = Get-VirtualDisplays | Select-Object -First 1
 if ($vdd -and (Test-HasDriver $vdd)) {
     Say 'The Virtual Display Driver is already installed'
