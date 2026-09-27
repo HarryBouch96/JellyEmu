@@ -45,27 +45,28 @@ namespace JellyEmu.Controllers
             // Reattach saves left behind if this game's file was moved or renamed.
             _saveLinks.OnGameLaunch(item);
 
+            // EXPERIMENT (experiment/game-streaming): some platforms stream from the gaming PC.
+            if (JellyEmuStreamController.IsStreamedPlatform(AppPaths, ResolvePlatformTag(item)))
+                return StreamTest(itemId);
+
             var resolvedCore = ResolveCore(item, userId, core);
 
             return resolvedCore switch
             {
                 "pico8" => PlayPico8(itemId),
-                // EXPERIMENT (experiment/game-streaming): PS2 streams from the gaming laptop.
-                "play"  => StreamTest(itemId),
+                "play"  => await PlayPlay(itemId, userId, slot),
                 _       => await PlayEjs(itemId, userId, slot, core, httpClientFactory)
             };
         }
 
         /// <summary>
         /// EXPERIMENT: full-screen page embedding a moonlight-web-stream session (Sunshine on the
-        /// gaming laptop, bridged to WebRTC) to test streaming inside the Jellyfin Xbox app. The
-        /// stream URL is read from {DataPath}/jellyemu-stream-test.url. Logs diagnostics to the
-        /// Jellyfin client log. LT+RT+L3+R3 goes back to Jellyfin.
+        /// gaming laptop, bridged to WebRTC). Gets a one-time pass from JellyEmuStreamController,
+        /// sends heartbeats while open, and on LT+RT+L3+R3 quits the game and goes back to
+        /// Jellyfin. Logs diagnostics to the Jellyfin client log.
         /// </summary>
         private ContentResult StreamTest(string itemId)
         {
-            var urlFile = Path.Combine(AppPaths.DataPath, "jellyemu-stream-test.url");
-            var streamUrl = System.IO.File.Exists(urlFile) ? System.IO.File.ReadAllText(urlFile).Trim() : string.Empty;
             var baseUrl = ToAppUrl(string.Empty).TrimEnd('/');
             var js = JavaScriptEncoder.Default;
 
@@ -90,7 +91,6 @@ namespace JellyEmu.Controllers
                 <div id="dbg"></div>
                 <script>
                 (function () {
-                  var url = "{{js.Encode(streamUrl)}}";
                   var exitUrl = "{{js.Encode(baseUrl + "/web/#/details?id=" + itemId)}}";
                   var t0 = Date.now(), lines = [], unsent = [], dbg = document.getElementById('dbg'), f = document.getElementById('f');
                   function log(m) {
@@ -111,14 +111,27 @@ namespace JellyEmu.Controllers
 
                   log('UA: ' + navigator.userAgent);
                   log('page: ' + location.origin + ' secure=' + window.isSecureContext);
-                  if (!url) { log('No stream URL configured (jellyemu-stream-test.url)'); flush(); return; }
-                  log('stream: ' + url);
                   f.addEventListener('load', function () { log('iframe loaded'); try { f.focus(); log('iframe focused'); } catch (e) { log('focus failed ' + e); } });
                   // Ask JellyEmu (with this user's Jellyfin login) for a one-time pass to the stream.
                   JellyEmu.fetch('/jellyemu/stream/pass/{{js.Encode(itemId)}}', { method: 'POST' })
-                    .then(function (r) { if (!r.ok) throw new Error('pass HTTP ' + r.status); return r.json(); })
+                    .then(function (r) {
+                      if (r.status === 409) return r.json().then(function (d) { throw new Error(d.message); });
+                      if (!r.ok) throw new Error('Could not start the stream (HTTP ' + r.status + ').');
+                      return r.json();
+                    })
                     .then(function (d) { log('pass received'); f.src = d.url; })
-                    .catch(function (e) { log('could not get a stream pass: ' + e.message); flush(); });
+                    .catch(function (e) { showMessage(e.message); log('no stream: ' + e.message); flush(); });
+
+                  function showMessage(text) {
+                    var m = document.createElement('div');
+                    m.textContent = text + ' Press B to go back.';
+                    m.style.cssText = 'position:fixed;inset:0;display:flex;align-items:center;justify-content:center;color:#fff;font:24px sans-serif;text-align:center;padding:40px';
+                    document.body.appendChild(m);
+                    window.addEventListener('keydown', function () { location.replace(exitUrl); }, { once: true });
+                  }
+
+                  // Tell JellyEmu the stream is still open, so nobody else takes over the gaming PC.
+                  setInterval(function () { JellyEmu.fetch('/jellyemu/stream/heartbeat', { method: 'POST' }).catch(function () {}); }, 30000);
                   window.addEventListener('blur', function () { log('top window blur (focus moved into iframe?)'); });
                   window.addEventListener('focus', function () { log('top window focus'); });
                   ['keydown'].forEach(function (n) { window.addEventListener(n, function (e) { log(n + ' key=' + e.key + ' keyCode=' + e.keyCode); }, true); });
@@ -135,6 +148,8 @@ namespace JellyEmu.Controllers
                         // Leave without history.back(): the iframe's own navigations share the
                         // tab history, so "back" would only step the iframe (e.g. to its login page).
                         exiting = true; log('exit combo'); flush();
+                        // Quit the game on the gaming PC, not just the stream.
+                        try { JellyEmu.fetch('/jellyemu/stream/quit', { method: 'POST', keepalive: true }).catch(function () {}); } catch (e) {}
                         if (f.parentNode) f.parentNode.removeChild(f);
                         location.replace(exitUrl);
                         setTimeout(function () { exiting = false; }, 3000); // allow a retry if navigation failed
