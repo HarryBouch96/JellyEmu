@@ -134,7 +134,7 @@
                 updateTouch();
                 break;
             case 'input':
-                lastInput = e.data.kind;
+                JE.noteInput(e.data.kind);
                 updateTouch();
                 break;
             case 'menu-toggle':
@@ -333,21 +333,19 @@
     document.body.appendChild(menuBtn);
 
     // ---- On-screen controls -------------------------------------------------------------------
-    // Shown per device, like in the browser emulator: "auto" shows them on touch screens until a
-    // controller or keyboard is used (and brings them back on a tap), "on"/"off" always/never.
-    var lastInput = null;
+    // Shown per device, like in the browser emulator: "auto" follows what the player last used
+    // (a tap shows them, a controller, remote or keyboard hides them), "on"/"off" always/never.
     function touchVisible() {
         var mode = JE.getTouchControlsMode();
         if (mode === 'on') return true;
         if (mode === 'off') return false;
-        if (!JE.isTouchDevice()) return false;
-        return lastInput !== 'controller' && lastInput !== 'keyboard';
+        return JE.usingTouch();
     }
     function updateTouch() {
         var show = started && touchVisible();
         if (show && !pad) buildPad();
         document.body.classList.toggle('je-touch-on', show);
-        menuBtn.classList.toggle('je-show', started && (show || JE.isTouchDevice()));
+        menuBtn.classList.toggle('je-show', started && (show || JE.usingTouch()));
         if (!show) releaseTouches();
     }
 

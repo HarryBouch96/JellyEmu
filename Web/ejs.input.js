@@ -856,7 +856,11 @@
                 try { pads = navigator.getGamepads ? navigator.getGamepads() : []; } catch (err) { /* ignore */ }
                 for (var i = 0; i < pads.length; i++) {
                     var gp = pads[i];
-                    if (gp && gp.buttons && gp.buttons.some(function (b) { return b && b.pressed; })) { hide('controller'); return; }
+                    if (gp && gp.buttons && gp.buttons.some(function (b) { return b && b.pressed; })) {
+                        if (JellyEmu.noteInput) JellyEmu.noteInput('other');
+                        hide('controller');
+                        return;
+                    }
                 }
                 requestAnimationFrame(poll);
             })();

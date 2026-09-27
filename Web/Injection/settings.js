@@ -338,7 +338,7 @@
                                 <select id="je-pref-vg" class="je-select">
                                     ${renderTouchModeOptions()}
                                 </select>
-                                <div class="je-field-desc">Touchscreen controls, in the browser and when streaming. Saved for this device only. Automatic shows them on touch screens until a controller or keyboard is used.</div>
+                                <div class="je-field-desc">Touchscreen controls, in the browser and when streaming. Saved for this device only. Automatic shows them when you are using touch, and hides them when you use a controller, remote or keyboard.</div>
                             </div>
 
                             <div class="je-input-container">

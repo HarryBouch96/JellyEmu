@@ -312,5 +312,58 @@
         });
     };
 
+    // ---- On-screen (touch) controls: chosen per device, not per account ----------------------
+    // "auto" (default) shows them when the player is using touch, going by what they last used
+    // (tap vs controller, remote, keyboard or mouse); "on" / "off" are the player's explicit
+    // choice for this device. Some TV and console browsers report a touch screen they don't
+    // have, so what the device claims only counts until the player has used something.
+    var TOUCH_KEY = 'jellyemu-touch-controls';
+    var INPUT_KEY = 'jellyemu-last-input';
+
+    JE.getTouchControlsMode = function () {
+        try {
+            var v = global.localStorage.getItem(TOUCH_KEY);
+            return v === 'on' || v === 'off' ? v : 'auto';
+        } catch (e) { return 'auto'; }
+    };
+
+    JE.setTouchControlsMode = function (mode) {
+        try { global.localStorage.setItem(TOUCH_KEY, mode === 'on' || mode === 'off' ? mode : 'auto'); } catch (e) { /* ignore */ }
+    };
+
+    /** A touch screen is the main input (phones, tablets), not just a touch-capable laptop. */
+    JE.isTouchDevice = function () {
+        try {
+            return (global.navigator.maxTouchPoints || 0) > 0 &&
+                !!(global.matchMedia && global.matchMedia('(pointer: coarse)').matches);
+        } catch (e) { return false; }
+    };
+
+    /** Records what the player last used on this device: 'touch', or 'other' (controller, remote, keyboard, mouse). */
+    JE.noteInput = function (kind) {
+        var value = kind === 'touch' ? 'touch' : 'other';
+        try { if (global.localStorage.getItem(INPUT_KEY) !== value) global.localStorage.setItem(INPUT_KEY, value); } catch (e) { /* ignore */ }
+    };
+
+    /** Whether the player is using touch on this device right now. */
+    JE.usingTouch = function () {
+        var last = null;
+        try { last = global.localStorage.getItem(INPUT_KEY); } catch (e) { /* ignore */ }
+        return last ? last === 'touch' : JE.isTouchDevice();
+    };
+
+    /** Whether on-screen controls should start visible on this device. */
+    JE.touchControlsWanted = function () {
+        var mode = JE.getTouchControlsMode();
+        return mode === 'on' || (mode === 'auto' && JE.usingTouch());
+    };
+
+    // Keys include the ones some TV apps make up for controller buttons and remotes.
+    if (global.addEventListener && !global.__jeInputTracking) {
+        global.__jeInputTracking = true;
+        global.addEventListener('pointerdown', function (e) { JE.noteInput(e.pointerType === 'touch' ? 'touch' : 'other'); }, true);
+        global.addEventListener('keydown', function () { JE.noteInput('other'); }, true);
+    }
+
 })(typeof window !== 'undefined' ? window : this);
 
