@@ -234,6 +234,46 @@
                     [{ id: 'auto', label: 'Automatic' }, { id: 'on', label: 'Always show' }, { id: 'off', label: 'Never show' }],
                     getTouchMode());
 
+                // Game streaming options, also per device (the stream page reads them). Only shown
+                // once a gaming PC is set up.
+                const STREAM_TRANSPORT_KEY = 'jellyemu-stream-transport';
+                const STREAM_DETAILS_KEY = 'jellyemu-stream-details';
+                const localValue = (key, fallback) => { try { return localStorage.getItem(key) || fallback; } catch (e) { return fallback; } };
+                const hasGamingPcs = !!(JE.streamedPlatforms && JE.streamedPlatforms.size > 0);
+                const streamingSection = !hasGamingPcs ? '' : `
+                    <div class="je-settings-section">
+                        <h2 class="je-settings-section-heading">
+                            <span class="material-icons" style="color:var(--accent, #00a4dc)">cast</span>
+                            Game Streaming (this device)
+                        </h2>
+                        <div class="je-settings-section-desc">For games streamed from a gaming PC. Saved for this device only.</div>
+
+                        <div class="je-settings-grid">
+                            <div class="je-input-container">
+                                <label class="je-input-label">Connection</label>
+                                <select id="je-pref-stream-transport" class="je-select">
+                                    ${renderOptions([
+                                        { id: 'auto', label: 'Automatic (recommended)' },
+                                        { id: 'webrtc', label: 'Direct only' },
+                                        { id: 'websocket', label: 'Through Jellyfin' }
+                                    ], localValue(STREAM_TRANSPORT_KEY, 'auto'))}
+                                </select>
+                                <div class="je-field-desc">Automatic connects straight to the gaming PC when the network allows, and otherwise goes through Jellyfin, which is a little slower. Choose Through Jellyfin if streams get stuck while connecting (some security software blocks direct connections).</div>
+                            </div>
+
+                            <div class="je-input-container">
+                                <label class="je-input-label">Connection Details</label>
+                                <select id="je-pref-stream-details" class="je-select">
+                                    ${renderOptions([
+                                        { id: '', label: 'Show when asked' },
+                                        { id: '1', label: 'Always show while connecting' }
+                                    ], localValue(STREAM_DETAILS_KEY, ''))}
+                                </select>
+                                <div class="je-field-desc">The step-by-step log on the screen shown while a stream connects. Useful when working out why a stream won't start.</div>
+                            </div>
+                        </div>
+                    </div>`;
+
                 container.innerHTML = `
                     <div class="je-settings-section">
                         <h2 class="je-settings-section-heading">
@@ -356,7 +396,22 @@
                                 Save Global Settings
                             </button>
                         </div>
-                    </div>`;
+                    </div>
+                    ${streamingSection}`;
+
+                // Game streaming options save straight away (they're only on this device).
+                const saveLocal = (id, key) => {
+                    const select = container.querySelector(id);
+                    if (!select) return;
+                    select.addEventListener('change', () => {
+                        try {
+                            if (select.value) localStorage.setItem(key, select.value); else localStorage.removeItem(key);
+                            showToast('Saved for this device.');
+                        } catch (e) { /* ignore */ }
+                    });
+                };
+                saveLocal('#je-pref-stream-transport', STREAM_TRANSPORT_KEY);
+                saveLocal('#je-pref-stream-details', STREAM_DETAILS_KEY);
 
                 const saveBtn = container.querySelector('#je-save-global');
                 saveBtn.addEventListener('click', () => {

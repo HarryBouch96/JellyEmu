@@ -91,11 +91,19 @@ namespace JellyEmu.Controllers
                 catch (System.Text.Json.JsonException) { customBindings = null; }
             }
 
+            // The gaming PC it streams from (the first one when none was picked), for the loading screen.
+            var pcs = JellyEmuStreamStore.Read(AppPaths)?.Devices;
+            var pc = pcs == null ? null
+                : string.IsNullOrEmpty(device) ? pcs.FirstOrDefault()
+                : pcs.FirstOrDefault(d => string.Equals(d.Id, device, StringComparison.OrdinalIgnoreCase));
+
             var config = System.Text.Json.JsonSerializer.Serialize(new
             {
                 itemId,
                 deviceQuery = string.IsNullOrEmpty(device) ? string.Empty : "?device=" + Uri.EscapeDataString(device),
                 exitUrl = baseUrl + "/web/#/details?id=" + itemId,
+                gameName = item.Name,
+                deviceName = pc?.Name ?? "the gaming PC",
                 scheme,
                 customBindings
             }, new System.Text.Json.JsonSerializerOptions { PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase });

@@ -12,7 +12,10 @@
  *    controller. So remaps apply to streams, and keyboards/remotes work for every system.
  *  - Raw keyboard, mouse and touch never reach the gaming PC (no clicking around its desktop).
  *  - The menu hotkey (Escape / the controller combo by default) asks the host to open its menu.
- *  - A start screen takes the first tap or press, which browsers require before playing sound.
+ *  - The bridge's progress, log lines and errors go to the host, which shows them; the bridge's
+ *    own dialogs are hidden. The host's connection setting (direct / through Jellyfin) applies.
+ *  - Once the picture is ready, a start screen takes the first tap or press, which browsers
+ *    require before playing sound.
  * Opened directly (not embedded), the bridge page is left untouched.
  */
 (function () {
@@ -30,10 +33,32 @@
         window.parent.postMessage(msg, HOST_ORIGIN);
     }
 
+    // ---- Settings from the host ------------------------------------------------------------------
+    // The host adds them to the stream's address as a fragment (it survives the sign-in redirect),
+    // e.g. #je-transport=websocket. They have to be in place before the bridge's own code starts.
+    var hashSettings = {};
+    location.hash.replace(/^#/, '').split('&').forEach(function (part) {
+        var kv = part.split('=');
+        if (kv[0]) hashSettings[decodeURIComponent(kv[0])] = decodeURIComponent(kv[1] || '');
+    });
+    // How the stream travels: "auto" (directly if the network allows, else through Jellyfin),
+    // "webrtc" (directly only) or "websocket" (always through Jellyfin). The bridge reads it from
+    // its saved settings.
+    var transport = hashSettings['je-transport'];
+    if (transport === 'auto' || transport === 'webrtc' || transport === 'websocket') {
+        try {
+            var saved = JSON.parse(localStorage.getItem('mlSettings') || '{}') || {};
+            saved.dataTransport = transport;
+            localStorage.setItem('mlSettings', JSON.stringify(saved));
+        } catch (e) { /* ignore */ }
+    }
+
     // ---- Bridge page tweaks -------------------------------------------------------------------
+    // JellyEmu's page shows progress, errors and notices itself (see "Progress" below), in a way
+    // that works with a controller, touch or keyboard. The bridge's own boxes are hidden.
     var style = document.createElement('style');
     style.textContent =
-        '#sidebar-root { display: none !important; }' +
+        '#sidebar-root, #modal-overlay, #notification-list { display: none !important; }' +
         '#je-start { position: fixed; inset: 0; z-index: 2147483647; display: flex; align-items: center; justify-content: center;' +
         '  background: rgba(0,0,0,.55); color: #fff; font: 600 clamp(18px, 3.2vmin, 30px) system-ui, sans-serif; text-align: center;' +
         '  padding: 24px; cursor: pointer; }';
@@ -211,16 +236,9 @@
     window.addEventListener('keyup', onKey, true);
     window.addEventListener('blur', function () { keysDown = {}; });
 
-    // The bridge's own dialogs (errors, "stream ended") still take taps and clicks.
-    function inBridgeDialog(target) {
-        var overlay = document.getElementById('modal-overlay');
-        return !!(overlay && !overlay.classList.contains('modal-disabled') && target && overlay.contains(target));
-    }
-
     ['pointerdown', 'pointerup', 'pointermove', 'mousedown', 'mouseup', 'mousemove', 'click', 'dblclick',
         'contextmenu', 'wheel', 'touchstart', 'touchmove', 'touchend'].forEach(function (type) {
         window.addEventListener(type, function (e) {
-            if (inBridgeDialog(e.target)) return;
             if (type === 'touchstart') send('input', { kind: 'touch' });
             if (type === 'pointerdown' || type === 'touchstart' || type === 'mousedown') { begin(); unlockMedia(); }
             e.stopImmediatePropagation();
@@ -237,7 +255,10 @@
     }
 
     // ---- Start screen -------------------------------------------------------------------------
+    // Shown once the picture is ready (until then the host shows its progress screen): a tap or
+    // press here is what lets the browser play the stream's sound.
     var startScreen = null;
+    var videoReady = false;
     function showStart() {
         if (started || startScreen || !document.body) return;
         startScreen = document.createElement('div');
@@ -246,12 +267,34 @@
         document.body.appendChild(startScreen);
     }
     function begin() {
-        if (started) return;
+        if (started || !videoReady) return;
         started = true;
         if (startScreen) startScreen.remove();
         send('started');
     }
-    if (document.body) showStart(); else document.addEventListener('DOMContentLoaded', showStart);
+
+    // ---- Progress -----------------------------------------------------------------------------
+    // The bridge reports connection progress, log lines and errors as "stream-info" events. They're
+    // passed to the host page, which shows them (the bridge's own boxes are hidden above).
+    var dispatch = EventTarget.prototype.dispatchEvent;
+    EventTarget.prototype.dispatchEvent = function (event) {
+        if (event && event.type === 'stream-info' && event.detail) {
+            try {
+                var d = event.detail;
+                var info = { kind: String(d.type || '') };
+                if (typeof d.line === 'string') info.line = d.line;
+                if (typeof d.message === 'string') info.message = d.message;
+                if (d.additional && typeof d.additional.type === 'string') info.level = d.additional.type;
+                if (d.app && typeof d.app.title === 'string') info.app = d.app.title;
+                send('stream', info);
+                if (info.kind === 'videoReady' && !videoReady) {
+                    videoReady = true;
+                    if (document.body) showStart();
+                }
+            } catch (e) { /* never get in the bridge's way */ }
+        }
+        return dispatch.apply(this, arguments);
+    };
 
     // ---- Messages from the host ---------------------------------------------------------------
     window.addEventListener('message', function (e) {

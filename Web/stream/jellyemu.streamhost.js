@@ -7,10 +7,15 @@
  *    (jellyemu.streamlayer.js), which turns every input into one controller for the gaming PC;
  *  - the menu (Escape / the controller combo / the on-screen menu button): resume, on-screen
  *    controls, exit;
- *  - on-screen controls for touch screens, shown per device like in the browser emulator.
+ *  - on-screen controls for touch screens, shown per device like in the browser emulator;
+ *  - a loading screen until the picture is ready (progress, Cancel, Details with the full log),
+ *    which also explains why a stream couldn't start or stopped.
  *
  * Configured by the page through window.JE_STREAM:
- *   { itemId, deviceQuery, exitUrl, scheme, customBindings }
+ *   { itemId, deviceQuery, exitUrl, gameName, deviceName, scheme, customBindings }
+ * Per-device settings (JellyEmu settings > Game Streaming), in localStorage:
+ *   jellyemu-stream-transport  auto | webrtc | websocket   how the stream connects
+ *   jellyemu-stream-details    "1": open Details on the loading screen straight away
  */
 (function () {
     'use strict';
@@ -41,6 +46,29 @@
         '  border: 2px solid transparent; border-radius: 10px; padding: 13px 16px; text-align: left; cursor: pointer; outline: none; }',
         '#je-menu button.je-focus { border-color: var(--je-accent); background: rgba(0,164,220,.18);',
         '  background: color-mix(in srgb, var(--je-accent) 22%, transparent); }',
+        // Loading screen: progress while the stream connects, and what went wrong if it can't.
+        '#je-loading { position: fixed; inset: 0; z-index: 25; display: flex; align-items: center; justify-content: center;',
+        '  background: #0b0b0e; color: #fff; font-family: system-ui, sans-serif; padding: 24px; box-sizing: border-box; }',
+        '#je-loading.je-hidden { display: none; }',
+        '#je-loading .je-card { width: min(92vw, 620px); display: flex; flex-direction: column; align-items: center; gap: 14px; text-align: center; }',
+        '#je-loading .je-card:focus { outline: none; }',
+        '#je-loading h1 { margin: 0; font-size: clamp(20px, 4vmin, 30px); font-weight: 600; }',
+        '#je-loading .je-sub { color: #aaa; font-size: 15px; margin-top: -6px; }',
+        '#je-loading .je-status { color: #ddd; font-size: 16px; line-height: 1.45; min-height: 1.45em; white-space: pre-line; }',
+        '#je-loading.je-error .je-status { color: #ffb4a8; }',
+        '#je-loading .je-spin { width: 34px; height: 34px; border-radius: 50%; border: 3px solid rgba(255,255,255,.15);',
+        '  border-top-color: var(--je-accent); animation: je-spin 0.9s linear infinite; }',
+        '#je-loading.je-error .je-spin { display: none; }',
+        '@keyframes je-spin { to { transform: rotate(360deg); } }',
+        '#je-loading .je-actions { display: flex; gap: 10px; margin-top: 6px; }',
+        '#je-loading button { font: 500 16px system-ui, sans-serif; color: #fff; background: rgba(255,255,255,.08); cursor: pointer;',
+        '  border: 2px solid transparent; border-radius: 10px; padding: 10px 20px; outline: none; }',
+        '#je-loading button.je-focus { border-color: var(--je-accent); background: rgba(0,164,220,.18);',
+        '  background: color-mix(in srgb, var(--je-accent) 22%, transparent); }',
+        '#je-loading .je-log { display: none; width: 100%; max-height: 38vh; overflow: auto; text-align: left; margin: 0;',
+        '  background: rgba(255,255,255,.05); border-radius: 8px; padding: 10px 12px; box-sizing: border-box;',
+        '  font: 12px/1.5 ui-monospace, Consolas, monospace; color: #bbb; white-space: pre-wrap; word-break: break-word; }',
+        '#je-loading.je-details .je-log { display: block; }',
         '#je-menu-btn { position: fixed; z-index: 15; top: 10px; left: 50%; transform: translateX(-50%); display: none;',
         '  width: 46px; height: 34px; border-radius: 17px; border: 0; background: rgba(0,0,0,.45); color: #fff;',
         '  font: 20px/34px system-ui, sans-serif; touch-action: none; }',
@@ -137,7 +165,11 @@
                 JE.noteInput(e.data.kind);
                 updateTouch();
                 break;
+            case 'stream':
+                onStreamInfo(e.data);
+                break;
             case 'menu-toggle':
+                if (loadingVisible) break;   // the loading screen has its own Cancel
                 if (menuOpen) closeMenu(); else openMenu();
                 break;
             case 'exit':
@@ -146,19 +178,197 @@
         }
     });
 
+    // ---- Loading screen -----------------------------------------------------------------------
+    // Covers the stream until its picture is ready: what's happening (from the bridge's progress,
+    // passed on by the stream layer), Cancel, and Details (the full log). If the stream can't start,
+    // or stops, it says why. Works with a controller, touch, mouse or keyboard.
+    var loadingEl = null, loadingVisible = false, loadingError = false, loadingStarted = Date.now();
+    var loadingButtons = [], loadingFocus = 0, loadingPrev = null, loadingNextAt = 0;
+    var fatalLines = [], fatalTimer = null, slowTimer = null, fellBack = false;
+
+    function deviceName() { return C.deviceName || 'the gaming PC'; }
+
+    function buildLoading() {
+        loadingEl = document.createElement('div');
+        loadingEl.id = 'je-loading';
+        loadingEl.innerHTML =
+            '<div class="je-card" tabindex="-1" role="dialog" aria-live="polite">' +
+            '<h1></h1><div class="je-sub"></div><div class="je-spin"></div><div class="je-status"></div>' +
+            '<div class="je-actions"><button type="button" data-act="cancel"></button>' +
+            '<button type="button" data-act="details"></button></div><pre class="je-log"></pre></div>';
+        loadingEl.querySelector('h1').textContent = C.gameName || 'Starting the game';
+        loadingEl.querySelector('.je-sub').textContent = 'Streamed from ' + deviceName();
+        loadingButtons = Array.prototype.slice.call(loadingEl.querySelectorAll('button'));
+        loadingEl.addEventListener('click', function (e) {
+            var b = e.target.closest && e.target.closest('button');
+            if (b) activateLoading(b.getAttribute('data-act'));
+        });
+        if (localSetting('jellyemu-stream-details', '') === '1') loadingEl.classList.add('je-details');
+        document.body.appendChild(loadingEl);
+        refreshLoadingButtons();
+    }
+
+    function refreshLoadingButtons() {
+        loadingButtons[0].textContent = loadingError ? 'Back' : 'Cancel';
+        loadingButtons[1].textContent = loadingEl.classList.contains('je-details') ? 'Hide details' : 'Details';
+    }
+
+    function setLoadingFocus(i) {
+        loadingFocus = (i + loadingButtons.length) % loadingButtons.length;
+        loadingButtons.forEach(function (b, n) { b.classList.toggle('je-focus', n === loadingFocus); });
+    }
+
+    function showLoading() {
+        if (!loadingEl) buildLoading();
+        loadingEl.classList.remove('je-hidden');
+        loadingVisible = true;
+        // Keys come here (not to the stream) while it shows; the card takes focus, not the buttons,
+        // so a host that also turns a controller press into a click can't press one twice.
+        try { loadingEl.querySelector('.je-card').focus({ preventScroll: true }); } catch (e) { /* ignore */ }
+        setLoadingFocus(0);
+        var gp = firstPad();
+        loadingPrev = { a: pressed(gp, 0), b: pressed(gp, 1), dir: loadingDirection(gp) };
+        loadingNextAt = Date.now() + 400;
+        requestAnimationFrame(pollLoading);
+        if (!loadingError && !slowTimer) {
+            setLoadingStatus('Connecting to ' + deviceName() + '…');
+            slowTimer = setTimeout(function () {
+                if (loadingVisible && !loadingError) {
+                    setLoadingStatus(statusText + '\nThis is taking longer than usual. Check that ' + deviceName() + ' is switched on and awake.');
+                }
+            }, 45000);
+        }
+    }
+
+    function hideLoading() {
+        if (!loadingEl || loadingError) return;
+        loadingEl.classList.add('je-hidden');
+        loadingVisible = false;
+        clearTimeout(slowTimer);
+        if (frame) try { frame.focus(); } catch (e) { /* ignore */ }
+    }
+
+    var statusText = '';
+    function setLoadingStatus(text) {
+        statusText = text;
+        if (loadingEl) loadingEl.querySelector('.je-status').textContent = text;
+    }
+
+    function addLog(line) {
+        if (!loadingEl) buildLoading();
+        var log = loadingEl.querySelector('.je-log');
+        var seconds = ((Date.now() - loadingStarted) / 1000).toFixed(1);
+        log.textContent += (log.textContent ? '\n' : '') + seconds.padStart(6, ' ') + 's  ' + line;
+        log.scrollTop = log.scrollHeight;
+    }
+
+    function showLoadingError(title, message) {
+        loadingError = true;
+        clearTimeout(slowTimer);
+        showLoading();
+        loadingEl.classList.add('je-error');
+        loadingEl.querySelector('h1').textContent = title;
+        setLoadingStatus(message);
+        addLog('ERROR: ' + message);
+        refreshLoadingButtons();
+    }
+
+    function activateLoading(act) {
+        if (act === 'cancel') {
+            // Nothing to quit if JellyEmu never gave a pass (e.g. the PC was in use by someone else).
+            if (streamOrigin) exitGame(); else leave();
+        } else if (act === 'details') {
+            loadingEl.classList.toggle('je-details');
+            refreshLoadingButtons();
+        }
+    }
+
+    function loadingDirection(gp) {
+        if (!gp) return null;
+        var ax = gp.axes[0] || 0, ay = gp.axes[1] || 0;
+        if (pressed(gp, 12) || pressed(gp, 14) || ax < -0.5 || ay < -0.5) return -1;
+        if (pressed(gp, 13) || pressed(gp, 15) || ax > 0.5 || ay > 0.5) return 1;
+        return null;
+    }
+
+    function pollLoading() {
+        if (!loadingVisible) return;
+        requestAnimationFrame(pollLoading);
+        if (menuOpen) return;
+        var gp = firstPad();
+        var a = pressed(gp, 0), b = pressed(gp, 1), dir = loadingDirection(gp);
+        if (a && !loadingPrev.a) activateLoading(loadingButtons[loadingFocus].getAttribute('data-act'));
+        else if (b && !loadingPrev.b) activateLoading('cancel');
+        var now = Date.now();
+        if (dir !== loadingPrev.dir) { if (dir) { setLoadingFocus(loadingFocus + dir); loadingNextAt = now + 400; } }
+        else if (dir && now >= loadingNextAt) { setLoadingFocus(loadingFocus + dir); loadingNextAt = now + 180; }
+        loadingPrev = { a: a, b: b, dir: dir };
+    }
+
+    // What the bridge reports, in words for people (the raw lines go to Details).
+    function onStreamInfo(info) {
+        var line = info.line || info.message || '';
+        if (line) addLog((info.level ? '[' + info.level + '] ' : '') + line);
+        switch (info.kind) {
+            case 'connectionComplete':
+                if (!loadingError) setLoadingStatus('Starting the game on ' + deviceName() + '…');
+                break;
+            case 'serverMessage':
+                if (!loadingError && info.message) setLoadingStatus(info.message);
+                break;
+            case 'videoReady':
+                hideLoading();
+                break;
+            case 'addDebugLine':
+                if (info.level === 'fatal' || info.level === 'fatalDescription') {
+                    // A fatal error can come as several lines: gather them for a moment.
+                    fatalLines.push(line);
+                    clearTimeout(fatalTimer);
+                    fatalTimer = setTimeout(function () {
+                        showLoadingError(started ? 'The stream stopped' : 'Couldn\'t start the stream', fatalLines.join('\n'));
+                        fatalLines = [];
+                    }, 400);
+                } else if (loadingError) {
+                    // (only the log after an error)
+                } else if (/Falling back to Web Socket/i.test(line)) {
+                    fellBack = true;
+                    setLoadingStatus('A direct connection isn\'t possible on this network, so the stream goes through Jellyfin instead (a little slower)…');
+                } else if (/Trying WebRTC transport/i.test(line)) {
+                    setLoadingStatus('Connecting directly to ' + deviceName() + '…');
+                } else if (/Trying Web Socket transport/i.test(line) && !fellBack) {
+                    setLoadingStatus('Connecting to ' + deviceName() + ' through Jellyfin…');
+                }
+                break;
+        }
+    }
+
     // ---- Starting and leaving -----------------------------------------------------------------
+    // Per-device streaming settings (JellyEmu settings > Game Streaming).
+    function localSetting(key, fallback) {
+        try { return localStorage.getItem(key) || fallback; } catch (e) { return fallback; }
+    }
+    var transport = localSetting('jellyemu-stream-transport', 'auto');
+    if (!/^(auto|webrtc|websocket)$/.test(transport)) transport = 'auto';
+
+    showLoading();
+    addLog('Asking JellyEmu for a stream from ' + deviceName() + ' (connection: ' + transport + ')');
     JE.fetch('/jellyemu/stream/pass/' + encodeURIComponent(C.itemId) + (C.deviceQuery || ''), { method: 'POST' })
         .then(function (r) {
             if (r.status === 409) return r.json().then(function (d) { throw new Error(d.message); });
-            if (!r.ok) throw new Error('Could not start the stream (HTTP ' + r.status + ').');
+            if (r.status === 503) throw new Error('No gaming PC is set up for streaming.');
+            if (!r.ok) throw new Error('JellyEmu couldn\'t start the stream (HTTP ' + r.status + ').');
             return r.json();
         })
         .then(function (d) {
             streamOrigin = new URL(d.url).origin;
-            frame.src = d.url;
-            frame.addEventListener('load', function () { try { frame.focus(); } catch (e) { /* ignore */ } });
+            addLog('Opening the stream at ' + streamOrigin);
+            // Settings for the stream layer ride along in the fragment (kept through the redirect).
+            frame.src = d.url + '#je-transport=' + encodeURIComponent(transport);
+            frame.addEventListener('load', function () {
+                if (!loadingVisible) try { frame.focus(); } catch (e) { /* ignore */ }
+            });
         })
-        .catch(function (e) { showMessage(e.message); });
+        .catch(function (e) { showLoadingError('Can\'t play right now', e.message); });
 
     // Tell JellyEmu the stream is still open, so nobody else takes over the gaming PC.
     setInterval(function () {
@@ -184,24 +394,6 @@
         leave();
     }
 
-    function showMessage(text) {
-        var m = document.createElement('div');
-        m.textContent = text;
-        m.style.cssText = 'position:fixed;inset:0;z-index:30;display:flex;align-items:center;justify-content:center;color:#fff;font:24px sans-serif;text-align:center;padding:40px';
-        document.body.appendChild(m);
-        // Returns by itself, or straight away on any key, button or tap.
-        var done = false;
-        function go() { if (!done) { done = true; leave(); } }
-        setTimeout(go, 5000);
-        window.addEventListener('keydown', go, { once: true });
-        window.addEventListener('pointerdown', go, { once: true });
-        (function waitForButton(prev) {
-            if (done) return;
-            var now = anyPadButton();
-            if (now && !prev) go(); else requestAnimationFrame(function () { waitForButton(now); });
-        })(anyPadButton());
-    }
-
     // ---- Controllers (this page reads them only for the menu) ---------------------------------
     function firstPad() {
         var pads = [];
@@ -212,10 +404,6 @@
         return null;
     }
     function pressed(gp, i) { var b = gp && gp.buttons[i]; return !!(b && (b.pressed || b.value > 0.5)); }
-    function anyPadButton() {
-        var gp = firstPad();
-        return !!(gp && gp.buttons.some(function (b) { return b && b.pressed; }));
-    }
 
     // ---- Menu ---------------------------------------------------------------------------------
     var menu = document.createElement('div');
@@ -285,6 +473,16 @@
     // "Unidentified") are left to the controller polling below.
     window.addEventListener('keydown', function (e) {
         if (e.key === 'Unidentified') return;
+        if (loadingVisible && !menuOpen) {
+            var used = true;
+            if (/^Arrow(Left|Up)$/.test(e.key)) setLoadingFocus(loadingFocus - 1);
+            else if (/^Arrow(Right|Down)$/.test(e.key) || e.key === 'Tab') setLoadingFocus(loadingFocus + 1);
+            else if (e.key === 'Enter' || e.key === ' ') activateLoading(loadingButtons[loadingFocus].getAttribute('data-act'));
+            else if (e.key === 'Escape' || e.key === 'Backspace') activateLoading('cancel');
+            else used = false;
+            if (used) { e.preventDefault(); e.stopPropagation(); }
+            return;
+        }
         if (!menuOpen) {
             // Focus ended up out here (a tap on the controls, say): Escape still opens the
             // menu, and anything else goes back to the game.
