@@ -183,6 +183,16 @@ public static class JeHttp
     public static string Pair(string bridgeUrl, CookieContainer cookies, long hostId,
         string sunshineUrl, string sunshineUser, string sunshinePassword, string clientName)
     {
+        // Cancel pairing requests left waiting by an earlier attempt, so the one below is the only one.
+        try
+        {
+            string waiting = Request("GET", sunshineUrl.TrimEnd('/') + "/api/pin", null, new CookieContainer(), sunshineUser, sunshinePassword);
+            foreach (Match old in Regex.Matches(waiting, "\"id\"\\s*:\\s*\"([0-9a-fA-F]{32})\""))
+                Request("DELETE", sunshineUrl.TrimEnd('/') + "/api/pin", "{\"pairing_id\":\"" + old.Groups[1].Value + "\"}",
+                    new CookieContainer(), sunshineUser, sunshinePassword);
+        }
+        catch (InvalidOperationException) { }   // older Sunshine: no list
+
         var request = Build("POST", bridgeUrl.TrimEnd('/') + "/api/pair", cookies, null, null, 120000);
         WriteBody(request, "{\"host_id\":" + hostId + "}");
         using (var response = (HttpWebResponse)request.GetResponse())
@@ -193,8 +203,29 @@ public static class JeHttp
             Match pin = Regex.Match(first, "\"Pin\"\\s*:\\s*\"?(\\d{4,})\"?");
             if (!pin.Success) throw new InvalidOperationException("The bridge couldn't start pairing: " + first);
 
-            Request("POST", sunshineUrl.TrimEnd('/') + "/api/pin",
-                "{\"pin\":\"" + pin.Groups[1].Value + "\",\"name\":\"" + clientName.Replace("\"", "") + "\"}",
+            // Newer Sunshine lists the pairing requests waiting for a PIN (GET /api/pin) and wants
+            // the id of the one the PIN is for. The bridge's request can take a moment to appear.
+            string api = sunshineUrl.TrimEnd('/') + "/api/pin";
+            string pairingId = null;
+            bool listed = true;
+            for (int i = 0; i < 20 && pairingId == null && listed; i++)
+            {
+                try
+                {
+                    MatchCollection ids = Regex.Matches(Request("GET", api, null, new CookieContainer(), sunshineUser, sunshinePassword),
+                        "\"id\"\\s*:\\s*\"([0-9a-fA-F]{32})\"");
+                    if (ids.Count > 0) pairingId = ids[ids.Count - 1].Groups[1].Value;   // the newest
+                    else System.Threading.Thread.Sleep(500);
+                }
+                catch (InvalidOperationException) { listed = false; }   // older Sunshine: no list
+            }
+            if (listed && pairingId == null) throw new InvalidOperationException("Sunshine didn't show the bridge's pairing request.");
+
+            string name = clientName.Replace("\"", "");
+            Request("POST", api,
+                pairingId == null
+                    ? "{\"pin\":\"" + pin.Groups[1].Value + "\",\"name\":\"" + name + "\"}"
+                    : "{\"pairing_id\":\"" + pairingId + "\",\"pin\":\"" + pin.Groups[1].Value + "\",\"name\":\"" + name + "\"}",
                 new CookieContainer(), sunshineUser, sunshinePassword);
 
             string second = reader.ReadLine();

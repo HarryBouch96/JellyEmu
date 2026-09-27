@@ -681,13 +681,23 @@ if ($admin) {
 
 # Add this PC's games Sunshine to the bridge and pair them.
 $hostId = [long]$config.hostId
-$paired = $false
 if ($hostId) {
-    try { $paired = ((Bridge 'GET' "/api/host?host_id=$hostId" | ConvertFrom-Json).host.paired -eq 'Paired') } catch { $hostId = 0 }
+    try { Bridge 'GET' "/api/host?host_id=$hostId" | Out-Null } catch { $hostId = 0 }
+}
+if (-not $hostId -and (Test-Path -LiteralPath $bridgeData)) {
+    # Added by an earlier attempt that stopped before saving its id?
+    $known = (Get-Content -LiteralPath $bridgeData -Raw | ConvertFrom-Json).hosts
+    if ($known) {
+        $existing = $known.PSObject.Properties | Where-Object { $_.Value.address -eq 'localhost' -and [int]$_.Value.http_port -eq [int]$config.sunshinePort } | Select-Object -First 1
+        if ($existing) { $hostId = [long]$existing.Name }
+    }
 }
 if (-not $hostId) {
     $hostId = [long]((Bridge 'POST' '/api/host' @{ address = 'localhost'; http_port = [int]$config.sunshinePort } | ConvertFrom-Json).host.host_id)
 }
+$config.hostId = $hostId
+Save-Config $config
+$paired = ((Bridge 'GET' "/api/host?host_id=$hostId" | ConvertFrom-Json).host.paired -eq 'Paired')
 if (-not $paired) {
     Say 'Pairing the bridge with Sunshine'
     $result = [JeHttp]::Pair($bridge, $cookies, $hostId, "https://localhost:$($config.sunshinePort + 1)", $sunshineUser, $sunshinePassword, 'JellyEmu bridge')
