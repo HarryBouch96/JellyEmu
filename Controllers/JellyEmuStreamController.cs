@@ -28,6 +28,7 @@ namespace JellyEmu.Controllers
     ///   POST /jellyemu/stream/quit?device=               - quit the game on that PC
     ///   GET  /jellyemu/stream/launch                     - a PC's launcher asks which game to start
     ///   GET/POST /jellyemu/stream/save                   - that launcher syncs the game's in-game save
+    ///   GET/POST /jellyemu/stream/saveset/{name}         - ... and the player's memory cards (PS2, GameCube)
     ///   GET  /jellyemu/stream/platforms                  - platforms any PC can stream (UI shows Play)
     /// Settings: {DataPath}/jellyemu-stream.json. Launcher key: {DataPath}/jellyemu-launcher.key.
     /// </summary>
@@ -237,7 +238,8 @@ namespace JellyEmu.Controllers
             if (current == null) return NotFound();
             Logger.LogInformation("[JellyEmu] Launcher on {Device} starting {Name} ({Platform})",
                 SanitizeForLog(target!.Id), SanitizeForLog(current.Name), SanitizeForLog(current.Platform));
-            return Ok(new { itemId = current.ItemId, name = current.Name, platform = current.Platform, path = current.Path });
+            // userId lets the launcher tell whose saves are on the PC (several people may use it).
+            return Ok(new { itemId = current.ItemId, userId = current.UserId, name = current.Name, platform = current.Platform, path = current.Path });
         }
 
         /// <summary>
@@ -281,6 +283,50 @@ namespace JellyEmu.Controllers
 
         // The browser emulator's automatic in-game save slot (see Web/ejs.save.js AUTO_SRAM_SLOT).
         private const int AutoSaveSlot = 100;
+
+        // Emulators that keep saves on memory cards shared by all games (like the real consoles)
+        // sync them as one "save set" per user, e.g. the PS2 memory cards or GameCube cards.
+        private static readonly HashSet<string> SaveSets = new(StringComparer.Ordinal) { "ps2-memcards", "gc-cards" };
+
+        /// <summary>
+        /// A save set (a zip of an emulator's memory cards) of whoever is playing on this gaming PC.
+        /// Kept centrally so any gaming PC continues from the same cards. GET fetches it (404 when
+        /// there is none); POST stores a new one. Launcher key required.
+        /// </summary>
+        [HttpGet("/jellyemu/stream/saveset/{name}")]
+        [HttpPost("/jellyemu/stream/saveset/{name}")]
+        [AllowAnonymous]
+        [DisableRequestSizeLimit]
+        public async Task<IActionResult> SaveSet(string name)
+        {
+            if (!LauncherKeyValid()) return Unauthorized();
+            if (!SaveSets.Contains(name)) return NotFound();
+            var target = FindDevice(Request.Headers["X-JellyEmu-Device"].ToString());
+            var current = target == null ? null : ReadCurrent(target.Id);
+            if (current == null || !IsValidId(current.UserId)) return NotFound();
+
+            var dir = Path.Combine(GetSafeUserSavesDir(current.UserId), "savesets");
+            Directory.CreateDirectory(dir);
+            var path = Path.Combine(dir, name + ".zip");
+            if (HttpMethods.IsGet(Request.Method))
+            {
+                if (!System.IO.File.Exists(path)) return NotFound();
+                return PhysicalFile(path, "application/zip");
+            }
+
+            var temp = path + ".tmp";
+            using (var fs = System.IO.File.Create(temp))
+                await Request.Body.CopyToAsync(fs, HttpContext.RequestAborted).ConfigureAwait(false);
+            if (new FileInfo(temp).Length < 22) // smaller than an empty zip
+            {
+                System.IO.File.Delete(temp);
+                return BadRequest("Save set is empty.");
+            }
+            System.IO.File.Move(temp, path, overwrite: true);
+            Logger.LogInformation("[JellyEmu] Saved {Set} for user {UserId} from {Device} ({Bytes} bytes)",
+                name, SanitizeForLog(current.UserId), SanitizeForLog(target!.Id), new FileInfo(path).Length);
+            return NoContent();
+        }
 
         private bool LauncherKeyValid()
         {
