@@ -72,24 +72,43 @@
      * Asks where to play. Resolves to "local", a gaming PC id, or null if cancelled.
      * Resolves to "local" without showing anything when no gaming PC is set up.
      */
+    // How often an open picker re-checks the gaming PCs (the server caches each PC's status for 5 s).
+    const REFRESH_MS = 5000;
+
     JE.choosePlayDevice = function (itemId) {
         return new Promise(function (resolve) {
             const picker = openPicker(itemId, resolve);
-            JE.fetch('/jellyemu/stream/devices/' + itemId)
-                .then(function (r) { return r.ok ? r.json() : null; })
-                .catch(function () { return null; })
-                .then(function (info) {
-                    if (picker.closed) return;
-                    if (!info || !info.devices || !info.devices.length) { picker.close('local'); return; }
-                    const unsupported = JE.ejsUnsupportedPlatforms.has(info.platform);
-                    const tooSlow = TOO_SLOW_IN_BROWSER.has(info.platform);
-                    const local = {
-                        id: 'local', name: 'This device', icon: 'local', available: !unsupported && !tooSlow,
-                        reason: unsupported ? "Can't play this system here" : tooSlow ? 'Too demanding to play here' : ''
-                    };
-                    picker.show(info.name, info.platform,
-                        [local].concat(info.devices.map(function (d) { return Object.assign({ icon: 'pc' }, d); })));
+            let shown = false;
+
+            function load() {
+                return JE.fetch('/jellyemu/stream/devices/' + itemId)
+                    .then(function (r) { return r.ok ? r.json() : null; })
+                    .catch(function () { return null; })
+                    .then(function (info) {
+                        if (picker.closed) return;
+                        if (!info || !info.devices || !info.devices.length) {
+                            // No gaming PCs: just play here (only decided on the first check).
+                            if (!shown) picker.close('local');
+                            return;
+                        }
+                        const unsupported = JE.ejsUnsupportedPlatforms.has(info.platform);
+                        const tooSlow = TOO_SLOW_IN_BROWSER.has(info.platform);
+                        const local = {
+                            id: 'local', name: 'This device', icon: 'local', available: !unsupported && !tooSlow,
+                            reason: unsupported ? "Can't play this system here" : tooSlow ? 'Too demanding to play here' : ''
+                        };
+                        picker.show(info.name, info.platform,
+                            [local].concat(info.devices.map(function (d) { return Object.assign({ icon: 'pc' }, d); })));
+                        shown = true;
+                    });
+            }
+
+            // Keep checking while it's open, so a PC that comes online (or frees up) shows as ready.
+            (function refresh() {
+                load().then(function () {
+                    if (!picker.closed) setTimeout(function () { if (!picker.closed) refresh(); }, REFRESH_MS);
                 });
+            })();
         });
     };
 
@@ -123,7 +142,7 @@
         panel.appendChild(cancel);
         overlay.appendChild(panel);
 
-        const state = { closed: false, platform: null, targets: [cancel], focus: 0 };
+        const state = { closed: false, platform: null, targets: [cancel], ids: ['cancel'], focus: 0, shownKey: null };
 
         function setFocus(i) {
             state.targets.forEach(function (t) { t.classList.remove('je-focus'); });
@@ -173,6 +192,12 @@
             get closed() { return state.closed; },
             close: close,
             show: function (name, platform, options) {
+                // Re-checks redraw only when something changed, and keep the selection if it's still there.
+                const key = JSON.stringify([name, options]);
+                if (key === state.shownKey) return;
+                const firstShow = state.shownKey === null;
+                const focusedId = state.ids[state.focus];
+                state.shownKey = key;
                 state.platform = platform;
                 game.textContent = name || '';
                 list.textContent = '';
@@ -201,9 +226,12 @@
                 });
                 // Unavailable options are shown but skipped when moving between choices.
                 state.targets = usable.map(function (u) { return u.button; }).concat([cancel]);
-                let remembered = null;
-                try { remembered = localStorage.getItem(rememberKey(platform)); } catch (e) { /* ignore */ }
-                const start = usable.findIndex(function (u) { return u.id === remembered; });
+                state.ids = usable.map(function (u) { return u.id; }).concat(['cancel']);
+                let wanted = focusedId;
+                if (firstShow) {
+                    try { wanted = localStorage.getItem(rememberKey(platform)); } catch (e) { /* ignore */ }
+                }
+                const start = state.ids.indexOf(wanted);
                 setFocus(start >= 0 ? start : 0);
             }
         };
