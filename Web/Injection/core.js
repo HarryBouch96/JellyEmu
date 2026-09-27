@@ -106,15 +106,25 @@
     };
 
     JE.launchEmulator = function(itemId, slot) {
-        console.log('[JellyEmu] Launching emulator for item:', itemId);
+        // Save-slot launches resume the browser emulator's own save states, so they stay local.
+        // Otherwise ask where to play (EXPERIMENT: game streaming; "local" when no gaming PC is set up).
+        var choice = slot || !JE.choosePlayDevice ? Promise.resolve('local') : JE.choosePlayDevice(itemId);
+        choice.then(function(device) {
+            if (device) JE.startGame(itemId, slot, device);
+        });
+    };
+
+    JE.startGame = function(itemId, slot, device) {
+        console.log('[JellyEmu] Launching', itemId, 'on', device);
         var userId = window.ApiClient ? window.ApiClient.getCurrentUserId() : '';
         var playUrl = JE.getUrl('/jellyemu/play/' + itemId + (userId ? '?userId=' + userId : ''));
         if (slot) {
             playUrl += (playUrl.indexOf('?') !== -1 ? '&' : '?') + 'slot=' + slot;
         }
+        playUrl += (playUrl.indexOf('?') !== -1 ? '&' : '?') + 'device=' + encodeURIComponent(device || 'local');
 
-        // Romm sync-on-launch: pull if Romm has a newer save before launching
-        var syncPromise = userId
+        // Romm sync-on-launch: pull if Romm has a newer save before launching (browser play only)
+        var syncPromise = userId && device === 'local'
             ? JE.fetch('/jellyemu/romm/sync-on-launch/' + itemId + '/' + userId, { method: 'POST' }).catch(function() {})
             : Promise.resolve();
 

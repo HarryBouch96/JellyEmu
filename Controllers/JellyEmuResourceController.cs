@@ -22,6 +22,7 @@ namespace JellyEmu.Controllers
         {
             "utils.js",
             "core.js",
+            "picker.js",
             "cards.js",
             "details.js",
             "settings.js",

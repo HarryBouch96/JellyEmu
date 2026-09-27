@@ -34,7 +34,7 @@ namespace JellyEmu.Controllers
 
         [HttpGet("/jellyemu/play/{itemId}")]
         public async Task<IActionResult> Play(string itemId, [FromQuery] string? userId, [FromQuery] int? slot, [FromQuery] string? core,
-            [FromServices] IHttpClientFactory httpClientFactory)
+            [FromServices] IHttpClientFactory httpClientFactory, [FromQuery] string? device = null)
         {
             if (!IsValidId(itemId) || (!string.IsNullOrEmpty(userId) && !IsValidId(userId)))
                 return BadRequest("Invalid item or user ID.");
@@ -45,9 +45,17 @@ namespace JellyEmu.Controllers
             // Reattach saves left behind if this game's file was moved or renamed.
             _saveLinks.OnGameLaunch(item);
 
-            // EXPERIMENT (experiment/game-streaming): some platforms stream from the gaming PC.
-            if (JellyEmuStreamController.IsStreamedPlatform(AppPaths, ResolvePlatformTag(item)))
-                return StreamTest(itemId);
+            // EXPERIMENT (experiment/game-streaming): "device" comes from the "Play on" picker:
+            // "local" plays in this browser, anything else streams from that gaming PC. Without it,
+            // platforms a gaming PC streams go there (e.g. launches that bypass the picker).
+            if (!string.IsNullOrEmpty(device) && !string.Equals(device, "local", StringComparison.OrdinalIgnoreCase))
+            {
+                if (device.Length > 32 || !device.All(c => char.IsAsciiLetterOrDigit(c) || c == '-'))
+                    return BadRequest("Invalid device.");
+                return StreamTest(itemId, device);
+            }
+            if (string.IsNullOrEmpty(device) && JellyEmuStreamController.IsStreamedPlatform(AppPaths, ResolvePlatformTag(item)))
+                return StreamTest(itemId, string.Empty);
 
             var resolvedCore = ResolveCore(item, userId, core);
 
@@ -65,7 +73,7 @@ namespace JellyEmu.Controllers
         /// sends heartbeats while open, and on LT+RT+L3+R3 quits the game and goes back to
         /// Jellyfin. Logs diagnostics to the Jellyfin client log.
         /// </summary>
-        private ContentResult StreamTest(string itemId)
+        private ContentResult StreamTest(string itemId, string device)
         {
             var baseUrl = ToAppUrl(string.Empty).TrimEnd('/');
             var js = JavaScriptEncoder.Default;
@@ -113,7 +121,8 @@ namespace JellyEmu.Controllers
                   log('page: ' + location.origin + ' secure=' + window.isSecureContext);
                   f.addEventListener('load', function () { log('iframe loaded'); try { f.focus(); log('iframe focused'); } catch (e) { log('focus failed ' + e); } });
                   // Ask JellyEmu (with this user's Jellyfin login) for a one-time pass to the stream.
-                  JellyEmu.fetch('/jellyemu/stream/pass/{{js.Encode(itemId)}}', { method: 'POST' })
+                  var deviceQuery = "{{js.Encode(string.IsNullOrEmpty(device) ? "" : "?device=" + Uri.EscapeDataString(device))}}";
+                  JellyEmu.fetch('/jellyemu/stream/pass/{{js.Encode(itemId)}}' + deviceQuery, { method: 'POST' })
                     .then(function (r) {
                       if (r.status === 409) return r.json().then(function (d) { throw new Error(d.message); });
                       if (!r.ok) throw new Error('Could not start the stream (HTTP ' + r.status + ').');
@@ -131,7 +140,7 @@ namespace JellyEmu.Controllers
                   }
 
                   // Tell JellyEmu the stream is still open, so nobody else takes over the gaming PC.
-                  setInterval(function () { JellyEmu.fetch('/jellyemu/stream/heartbeat', { method: 'POST' }).catch(function () {}); }, 30000);
+                  setInterval(function () { JellyEmu.fetch('/jellyemu/stream/heartbeat' + deviceQuery, { method: 'POST' }).catch(function () {}); }, 30000);
                   window.addEventListener('blur', function () { log('top window blur (focus moved into iframe?)'); });
                   window.addEventListener('focus', function () { log('top window focus'); });
                   ['keydown'].forEach(function (n) { window.addEventListener(n, function (e) { log(n + ' key=' + e.key + ' keyCode=' + e.keyCode); }, true); });
@@ -149,7 +158,7 @@ namespace JellyEmu.Controllers
                         // tab history, so "back" would only step the iframe (e.g. to its login page).
                         exiting = true; log('exit combo'); flush();
                         // Quit the game on the gaming PC, not just the stream.
-                        try { JellyEmu.fetch('/jellyemu/stream/quit', { method: 'POST', keepalive: true }).catch(function () {}); } catch (e) {}
+                        try { JellyEmu.fetch('/jellyemu/stream/quit' + deviceQuery, { method: 'POST', keepalive: true }).catch(function () {}); } catch (e) {}
                         if (f.parentNode) f.parentNode.removeChild(f);
                         location.replace(exitUrl);
                         setTimeout(function () { exiting = false; }, 3000); // allow a retry if navigation failed

@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Net.Http.Json;
 using System.Security.Claims;
 using System.Security.Cryptography;
@@ -10,20 +11,23 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
+using Device = JellyEmu.Services.JellyEmuStreamDevices.Device;
+using Probe = JellyEmu.Services.JellyEmuStreamDevices.Probe;
 
 namespace JellyEmu.Controllers
 {
     /// <summary>
-    /// EXPERIMENT (experiment/game-streaming): streams games (PS2, GameCube) from a gaming PC via
-    /// Sunshine and the moonlight-web-stream bridge, gated behind the Jellyfin login. Caddy serves
-    /// the bridge at the stream host and calls these endpoints:
-    ///   POST /jellyemu/stream/pass/{itemId} - signed-in user asks for a one-time pass
-    ///   GET  /jellyemu/stream/login?pass=   - (via Caddy /jellyemu-auth) pass -> session cookie
-    ///   GET  /jellyemu/stream/check         - Caddy forward_auth before every bridge request
-    ///   POST /jellyemu/stream/heartbeat     - the stream page is still open
-    ///   POST /jellyemu/stream/quit          - quit the game on the gaming PC
-    ///   GET  /jellyemu/stream/launch        - the gaming PC's launcher asks which game to start
-    ///   GET  /jellyemu/stream/platforms     - platforms that stream (the UI shows Play for them)
+    /// EXPERIMENT (experiment/game-streaming): streams games from gaming PCs via Sunshine and the
+    /// moonlight-web-stream bridge, gated behind the Jellyfin login. Caddy serves each PC's bridge
+    /// at its stream host and calls the login/check endpoints.
+    ///   GET  /jellyemu/stream/devices/{itemId}           - gaming PCs for the "Play on" picker
+    ///   POST /jellyemu/stream/pass/{itemId}?device=      - signed-in user asks for a one-time pass
+    ///   GET  /jellyemu/stream/login?pass=                - (via Caddy /jellyemu-auth) pass -> session cookie
+    ///   GET  /jellyemu/stream/check                      - Caddy forward_auth before every bridge request
+    ///   POST /jellyemu/stream/heartbeat?device=          - the stream page is still open
+    ///   POST /jellyemu/stream/quit?device=               - quit the game on that PC
+    ///   GET  /jellyemu/stream/launch                     - a PC's launcher asks which game to start
+    ///   GET  /jellyemu/stream/platforms                  - platforms any PC can stream (UI shows Play)
     /// Settings: {DataPath}/jellyemu-stream.json. Launcher key: {DataPath}/jellyemu-launcher.key.
     /// </summary>
     public class JellyEmuStreamController : JellyEmuBaseController
@@ -31,7 +35,8 @@ namespace JellyEmu.Controllers
         // The bridge account Caddy signs requests in as. Its admin API is unreachable through
         // Caddy (see JellyEmuStreamAuth.IsAllowedRequest).
         private const string BridgeUser = "JellyEmuStream";
-        private static readonly TimeSpan BusyWindow = TimeSpan.FromSeconds(90);
+        private static readonly TimeSpan ProbeCacheFor = TimeSpan.FromSeconds(5);
+        private static readonly ConcurrentDictionary<string, (Probe Result, DateTimeOffset At)> ProbeCache = new();
         private static readonly object StateLock = new();
 
         public JellyEmuStreamController(
@@ -43,15 +48,6 @@ namespace JellyEmu.Controllers
             IHttpClientFactory httpClientFactory)
             : base(libraryManager, appPaths, logger, ejsManager, sessionService, httpClientFactory) { }
 
-        public class StreamSettings
-        {
-            public string StreamOrigin { get; set; } = string.Empty;
-            public long HostId { get; set; }
-            public long AppId { get; set; }
-            public string BridgeUrl { get; set; } = string.Empty;
-            public List<string> Platforms { get; set; } = new();
-        }
-
         public class CurrentGame
         {
             public string ItemId { get; set; } = string.Empty;
@@ -62,33 +58,58 @@ namespace JellyEmu.Controllers
             public DateTimeOffset LastSeen { get; set; }
         }
 
-        [HttpPost("/jellyemu/stream/pass/{itemId}")]
+        [HttpGet("/jellyemu/stream/devices/{itemId}")]
         [Authorize]
-        public async Task<IActionResult> Pass(string itemId)
+        public async Task<IActionResult> Devices(string itemId)
         {
             var userId = CurrentUserId();
             if (!IsValidId(itemId) || string.IsNullOrEmpty(userId)) return BadRequest();
             var item = LibraryManager.GetItemById(itemId);
             if (item == null) return NotFound();
-            var settings = ReadSettings();
-            if (settings == null) return StatusCode(StatusCodes.Status503ServiceUnavailable, "Streaming is not configured.");
+            var platform = ResolvePlatformTag(item);
+
+            var result = new List<object>();
+            foreach (var device in ReadSettings()?.Devices ?? new List<Device>())
+            {
+                var probe = device.Supports(platform) ? await ProbeDevice(device).ConfigureAwait(false) : Probe.Offline;
+                var current = ReadCurrent(device.Id);
+                var status = JellyEmuStreamDevices.Evaluate(device, platform, probe, current?.UserId,
+                    current?.LastSeen ?? DateTimeOffset.MinValue, userId, DateTimeOffset.UtcNow);
+                result.Add(new { id = device.Id, name = device.Name, available = status.Available, reason = status.Reason });
+            }
+            return Ok(new { platform, devices = result });
+        }
+
+        [HttpPost("/jellyemu/stream/pass/{itemId}")]
+        [Authorize]
+        public async Task<IActionResult> Pass(string itemId, [FromQuery] string? device)
+        {
+            var userId = CurrentUserId();
+            if (!IsValidId(itemId) || string.IsNullOrEmpty(userId)) return BadRequest();
+            var item = LibraryManager.GetItemById(itemId);
+            if (item == null) return NotFound();
+            var target = FindDevice(device);
+            if (target == null) return StatusCode(StatusCodes.Status503ServiceUnavailable, "No gaming PC is set up for streaming.");
 
             var now = DateTimeOffset.UtcNow;
-            var current = ReadCurrent();
-            if (current != null && current.ItemId != itemId)
-            {
-                // Someone else is still streaming: don't take their game away.
-                if (current.UserId != userId && now - current.LastSeen < BusyWindow)
-                    return Conflict(new { message = "The gaming PC is busy: someone else is playing " + current.Name + "." });
-                // Otherwise quit the previous game so the new one starts (same Sunshine app for every game).
-                await QuitRunningGame(settings).ConfigureAwait(false);
-            }
+            var probe = await ProbeDevice(target, fresh: true).ConfigureAwait(false);
+            var current = ReadCurrent(target.Id);
+            var status = JellyEmuStreamDevices.Evaluate(target, ResolvePlatformTag(item), probe, current?.UserId,
+                current?.LastSeen ?? DateTimeOffset.MinValue, userId, now);
+            if (!status.Available)
+                return Conflict(new { message = $"{target.Name}: {status.Reason}." });
 
-            var pass = new JellyEmuStreamAuth.Claims("pass", userId, itemId, settings.HostId, settings.AppId,
+            // Every game uses the same Sunshine app, so a different game still running would be
+            // resumed instead of starting the new one: quit it first.
+            if (probe == Probe.Busy && current?.ItemId != itemId)
+                await QuitRunningGame(target).ConfigureAwait(false);
+
+            var pass = new JellyEmuStreamAuth.Claims("pass", userId, itemId, target.HostId, target.AppId,
                 now.Add(JellyEmuStreamAuth.PassLifetime).ToUnixTimeSeconds(), JellyEmuStreamAuth.NewNonce());
             var token = JellyEmuStreamAuth.Sign(pass, GetKey());
-            Logger.LogInformation("[JellyEmu] Stream pass issued for user {UserId} item {ItemId}", SanitizeForLog(userId), SanitizeForLog(itemId));
-            return Ok(new { url = $"{settings.StreamOrigin}/jellyemu-auth?pass={Uri.EscapeDataString(token)}" });
+            Logger.LogInformation("[JellyEmu] Stream pass issued for user {UserId} item {ItemId} on {Device}",
+                SanitizeForLog(userId), SanitizeForLog(itemId), SanitizeForLog(target.Id));
+            return Ok(new { url = $"{target.StreamOrigin.TrimEnd('/')}/jellyemu-auth?pass={Uri.EscapeDataString(token)}" });
         }
 
         [HttpGet("/jellyemu/stream/login")]
@@ -104,8 +125,9 @@ namespace JellyEmu.Controllers
             }
 
             var item = LibraryManager.GetItemById(claims.ItemId);
-            if (item == null) return NotFound();
-            WriteCurrent(new CurrentGame
+            var device = ReadSettings()?.Devices.FirstOrDefault(d => d.HostId == claims.HostId);
+            if (item == null || device == null) return NotFound();
+            WriteCurrent(device.Id, new CurrentGame
             {
                 ItemId = claims.ItemId,
                 UserId = claims.UserId,
@@ -129,7 +151,8 @@ namespace JellyEmu.Controllers
                 Path = "/",
                 MaxAge = JellyEmuStreamAuth.SessionLifetime
             });
-            Logger.LogInformation("[JellyEmu] Stream session started for user {UserId}: {Name}", SanitizeForLog(claims.UserId), SanitizeForLog(item.Name));
+            Logger.LogInformation("[JellyEmu] Stream session started for user {UserId}: {Name} on {Device}",
+                SanitizeForLog(claims.UserId), SanitizeForLog(item.Name), SanitizeForLog(device.Id));
             return Redirect($"/stream.html?hostId={claims.HostId}&appId={claims.AppId}");
         }
 
@@ -156,49 +179,52 @@ namespace JellyEmu.Controllers
         }
 
         /// <summary>
-        /// Platforms streamed from the gaming PC, so the UI shows Play for them. Anonymous because
-        /// the UI asks before the Jellyfin client is signed in; it only lists platform names.
+        /// Platforms any gaming PC can stream, so the UI shows Play for them. Anonymous because the
+        /// UI asks before the Jellyfin client is signed in; it only lists platform names.
         /// </summary>
         [HttpGet("/jellyemu/stream/platforms")]
         [AllowAnonymous]
-        public IActionResult Platforms() => Ok(ReadSettings()?.Platforms ?? new List<string>());
+        public IActionResult Platforms() =>
+            Ok((ReadSettings()?.Devices ?? new List<Device>()).SelectMany(d => d.Platforms).Distinct(StringComparer.OrdinalIgnoreCase).ToList());
 
         [HttpPost("/jellyemu/stream/heartbeat")]
         [Authorize]
-        public IActionResult Heartbeat()
+        public IActionResult Heartbeat([FromQuery] string? device)
         {
+            var target = FindDevice(device);
+            if (target == null) return NoContent();
             var userId = CurrentUserId();
             lock (StateLock)
             {
-                var current = ReadCurrent();
+                var current = ReadCurrent(target.Id);
                 if (current == null || current.UserId != userId) return NoContent();
                 current.LastSeen = DateTimeOffset.UtcNow;
-                WriteCurrent(current);
+                WriteCurrent(target.Id, current);
             }
             return NoContent();
         }
 
         [HttpPost("/jellyemu/stream/quit")]
         [Authorize]
-        public async Task<IActionResult> Quit()
+        public async Task<IActionResult> Quit([FromQuery] string? device)
         {
-            var settings = ReadSettings();
-            if (settings == null) return NoContent();
-            var current = ReadCurrent();
+            var target = FindDevice(device);
+            if (target == null) return NoContent();
+            var current = ReadCurrent(target.Id);
             // Only the person playing may quit the game.
             if (current != null && current.UserId != CurrentUserId()) return Forbid();
-            await QuitRunningGame(settings).ConfigureAwait(false);
+            await QuitRunningGame(target).ConfigureAwait(false);
             if (current != null)
             {
                 current.LastSeen = DateTimeOffset.MinValue;
-                WriteCurrent(current);
+                WriteCurrent(target.Id, current);
             }
             return NoContent();
         }
 
         /// <summary>
-        /// Called by the launcher on the gaming PC (the single "JellyEmu" Sunshine app) to find out
-        /// which game to start. Requires the shared launcher key.
+        /// Called by a gaming PC's launcher (its single "JellyEmu" Sunshine app) to find out which
+        /// game to start. Requires the shared launcher key; X-JellyEmu-Device names the PC.
         /// </summary>
         [HttpGet("/jellyemu/stream/launch")]
         [AllowAnonymous]
@@ -211,73 +237,129 @@ namespace JellyEmu.Controllers
                 Logger.LogWarning("[JellyEmu] Launcher request refused: bad key");
                 return Unauthorized();
             }
-            var current = ReadCurrent();
+            var target = FindDevice(Request.Headers["X-JellyEmu-Device"].ToString());
+            var current = target == null ? null : ReadCurrent(target.Id);
             if (current == null) return NotFound();
-            Logger.LogInformation("[JellyEmu] Launcher starting {Name} ({Platform})", SanitizeForLog(current.Name), SanitizeForLog(current.Platform));
+            Logger.LogInformation("[JellyEmu] Launcher on {Device} starting {Name} ({Platform})",
+                SanitizeForLog(target!.Id), SanitizeForLog(current.Name), SanitizeForLog(current.Platform));
             return Ok(new { itemId = current.ItemId, name = current.Name, platform = current.Platform, path = current.Path });
         }
 
-        private async Task QuitRunningGame(StreamSettings settings)
+        /// <summary>Asks the PC's bridge whether its Sunshine is reachable and free. Cached briefly.</summary>
+        private async Task<Probe> ProbeDevice(Device device, bool fresh = false)
+        {
+            var now = DateTimeOffset.UtcNow;
+            if (!fresh && ProbeCache.TryGetValue(device.Id, out var cached) && now - cached.At < ProbeCacheFor)
+                return cached.Result;
+
+            Probe result;
+            try
+            {
+                using var client = HttpClientFactory.CreateClient();
+                client.Timeout = TimeSpan.FromSeconds(3);
+                using var request = new HttpRequestMessage(HttpMethod.Get, $"{device.BridgeUrl.TrimEnd('/')}/api/host?host_id={device.HostId}");
+                request.Headers.Add(JellyEmuStreamAuth.UserHeader, BridgeUser);
+                using var response = await client.SendAsync(request).ConfigureAwait(false);
+                if (!response.IsSuccessStatusCode)
+                {
+                    result = Probe.HostUnavailable;
+                }
+                else
+                {
+                    using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync().ConfigureAwait(false));
+                    var host = doc.RootElement.GetProperty("host");
+                    var paired = host.TryGetProperty("paired", out var p) && p.GetString() == "Paired";
+                    var state = host.TryGetProperty("server_state", out var s) ? s.GetString() : null;
+                    result = !paired || state == null ? Probe.HostUnavailable
+                        : string.Equals(state, "Busy", StringComparison.OrdinalIgnoreCase) ? Probe.Busy
+                        : Probe.Free;
+                }
+            }
+            catch (Exception ex) when (ex is HttpRequestException || ex is TaskCanceledException)
+            {
+                result = Probe.Offline;
+            }
+            catch (Exception ex) when (ex is JsonException || ex is KeyNotFoundException || ex is InvalidOperationException)
+            {
+                result = Probe.HostUnavailable;
+            }
+            ProbeCache[device.Id] = (result, now);
+            return result;
+        }
+
+        private async Task QuitRunningGame(Device device)
         {
             try
             {
                 using var client = HttpClientFactory.CreateClient();
                 client.Timeout = TimeSpan.FromSeconds(8);
-                using var request = new HttpRequestMessage(HttpMethod.Post, settings.BridgeUrl.TrimEnd('/') + "/api/host/cancel")
+                using var request = new HttpRequestMessage(HttpMethod.Post, device.BridgeUrl.TrimEnd('/') + "/api/host/cancel")
                 {
-                    Content = JsonContent.Create(new { host_id = settings.HostId })
+                    Content = JsonContent.Create(new { host_id = device.HostId })
                 };
                 request.Headers.Add(JellyEmuStreamAuth.UserHeader, BridgeUser);
                 using var response = await client.SendAsync(request).ConfigureAwait(false);
-                Logger.LogInformation("[JellyEmu] Asked the gaming PC to quit its game: HTTP {Status}", (int)response.StatusCode);
+                ProbeCache.TryRemove(device.Id, out _);
+                Logger.LogInformation("[JellyEmu] Asked {Device} to quit its game: HTTP {Status}", SanitizeForLog(device.Id), (int)response.StatusCode);
             }
             catch (Exception ex) when (ex is HttpRequestException || ex is TaskCanceledException)
             {
-                Logger.LogWarning(ex, "[JellyEmu] Could not ask the gaming PC to quit its game");
+                Logger.LogWarning(ex, "[JellyEmu] Could not ask {Device} to quit its game", SanitizeForLog(device.Id));
             }
         }
 
         private string? CurrentUserId() =>
             User.FindFirstValue("Jellyfin-UserId") ?? User.FindFirstValue(ClaimTypes.NameIdentifier);
 
-        /// <summary>Platforms streamed from the gaming PC instead of played in the browser.</summary>
-        internal static bool IsStreamedPlatform(IApplicationPaths appPaths, string platform)
+        /// <summary>The named device, or the first one when no name is given.</summary>
+        private Device? FindDevice(string? id)
         {
-            var settings = ReadSettings(appPaths);
-            return settings != null && settings.Platforms.Contains(platform, StringComparer.OrdinalIgnoreCase);
+            var devices = ReadSettings()?.Devices;
+            if (devices == null || devices.Count == 0) return null;
+            return string.IsNullOrEmpty(id) ? devices[0] : devices.FirstOrDefault(d => string.Equals(d.Id, id, StringComparison.OrdinalIgnoreCase));
         }
 
-        private StreamSettings? ReadSettings() => ReadSettings(AppPaths);
+        /// <summary>Platforms streamed from a gaming PC instead of played in the browser.</summary>
+        internal static bool IsStreamedPlatform(IApplicationPaths appPaths, string platform) =>
+            ReadSettings(appPaths)?.Devices.Any(d => d.Supports(platform)) == true;
 
-        private static StreamSettings? ReadSettings(IApplicationPaths appPaths)
+        private JellyEmuStreamDevices.Settings? ReadSettings() => ReadSettings(AppPaths);
+
+        private static JellyEmuStreamDevices.Settings? ReadSettings(IApplicationPaths appPaths)
         {
             var file = Path.Combine(appPaths.DataPath, "jellyemu-stream.json");
             if (!System.IO.File.Exists(file)) return null;
             try
             {
-                var s = JsonSerializer.Deserialize<StreamSettings>(System.IO.File.ReadAllText(file), new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
-                return s != null && !string.IsNullOrEmpty(s.StreamOrigin) && !string.IsNullOrEmpty(s.BridgeUrl) ? s : null;
+                var s = JsonSerializer.Deserialize<JellyEmuStreamDevices.Settings>(System.IO.File.ReadAllText(file), new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                if (s == null) return null;
+                s.Devices = s.Devices.Where(d => IsValidDeviceId(d.Id) && !string.IsNullOrEmpty(d.StreamOrigin) && !string.IsNullOrEmpty(d.BridgeUrl)).ToList();
+                return s;
             }
             catch (JsonException) { return null; }
         }
 
-        private string CurrentFile => Path.Combine(AppPaths.DataPath, "jellyemu-stream-current.json");
+        private static bool IsValidDeviceId(string id) =>
+            !string.IsNullOrEmpty(id) && id.Length <= 32 && id.All(c => char.IsAsciiLetterOrDigit(c) || c == '-');
 
-        private CurrentGame? ReadCurrent()
+        private string CurrentFile(string deviceId) => Path.Combine(AppPaths.DataPath, $"jellyemu-stream-current-{deviceId}.json");
+
+        private CurrentGame? ReadCurrent(string deviceId)
         {
             lock (StateLock)
             {
-                if (!System.IO.File.Exists(CurrentFile)) return null;
-                try { return JsonSerializer.Deserialize<CurrentGame>(System.IO.File.ReadAllText(CurrentFile)); }
+                var file = CurrentFile(deviceId);
+                if (!System.IO.File.Exists(file)) return null;
+                try { return JsonSerializer.Deserialize<CurrentGame>(System.IO.File.ReadAllText(file)); }
                 catch (JsonException) { return null; }
             }
         }
 
-        private void WriteCurrent(CurrentGame game)
+        private void WriteCurrent(string deviceId, CurrentGame game)
         {
             lock (StateLock)
             {
-                System.IO.File.WriteAllText(CurrentFile, JsonSerializer.Serialize(game));
+                System.IO.File.WriteAllText(CurrentFile(deviceId), JsonSerializer.Serialize(game));
             }
         }
 
