@@ -318,6 +318,56 @@ if ($SyncOnly) {
     exit 0
 }
 
+# ---- Controller ---------------------------------------------------------------------------------
+# The stream's controller is a virtual Xbox controller Sunshine creates when the stream connects, a
+# moment after this launcher starts. Another may already be connected (another Sunshine
+# session, or a controller used on this PC), so the emulator is told which slot is the
+# stream's: the one that appears after the launcher started.
+Add-Type -TypeDefinition @'
+using System.Runtime.InteropServices;
+public static class JeXInput {
+    [StructLayout(LayoutKind.Sequential)] struct STATE { public uint Packet; public ushort Buttons; public byte LT, RT; public short LX, LY, RX, RY; }
+    [DllImport("xinput1_4.dll")] static extern int XInputGetState(int user, out STATE state);
+    public static bool Connected(int user) { STATE s; return XInputGetState(user, out s) == 0; }
+}
+'@
+function Get-XInputSlots { @(0..3 | Where-Object { [JeXInput]::Connected($_) }) }
+$slotsAtStart = Get-XInputSlots
+
+function Get-StreamControllerSlot {
+    for ($i = 0; $i -lt 50; $i++) {
+        $new = @(Get-XInputSlots | Where-Object { $slotsAtStart -notcontains $_ })
+        if ($new.Count) { Log "The stream's controller is slot $($new[0])"; return $new[0] }
+        Start-Sleep -Milliseconds 100
+    }
+    $now = Get-XInputSlots
+    $slot = if ($now.Count) { $now[-1] } else { 0 }
+    Log "No new controller appeared (connected: $($now -join ', ')); using slot $slot"
+    return $slot
+}
+
+# Point each emulator's player 1 at that slot. (PCSX2 names XInput controllers SDL-<slot>; Dolphin
+# XInput/<slot>; RetroArch's xinput driver numbers them by slot too.)
+function Set-EmulatorController([string]$platform, [int]$slot) {
+    switch ($platform) {
+        'PlayStation 2' {
+            $ini = Join-Path $root 'pcsx2\inis\PCSX2.ini'
+            $text = [IO.File]::ReadAllText($ini)
+            [IO.File]::WriteAllText($ini, ($text -replace 'SDL-\d+/', "SDL-$slot/"), (New-Object Text.UTF8Encoding $false))
+        }
+        'GameCube' {
+            $ini = Join-Path $root 'dolphin\User\Config\GCPadNew.ini'
+            $text = [IO.File]::ReadAllText($ini)
+            [IO.File]::WriteAllText($ini, ($text -replace '(?m)^Device = XInput/\d+/Gamepad', "Device = XInput/$slot/Gamepad"), (New-Object Text.UTF8Encoding $false))
+        }
+        default {
+            $cfg = Join-Path $syncDir 'retroarch-controller.cfg'
+            Set-Content -LiteralPath $cfg -Value "input_player1_joypad_index = `"$slot`"" -Encoding ASCII
+            $script:emuArgs = @('--appendconfig', "`"$cfg`"") + $script:emuArgs
+        }
+    }
+}
+
 # ---- Screen -------------------------------------------------------------------------------------
 # Games run on the Virtual Display Driver monitor, which is all the games Sunshine streams, so the
 # desktop and notifications on the real screen never appear in the stream. Physical pixels.
@@ -455,6 +505,7 @@ try {
     }
 
     Wait-StreamAudio
+    Set-EmulatorController $info.platform (Get-StreamControllerSlot)
 
     # Emulators start in a normal window; it is then made borderless and placed over the target
     # screen (their own full-screen modes always use the main screen). Checked again every second
