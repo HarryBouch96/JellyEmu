@@ -312,5 +312,35 @@
         });
     };
 
+    // ---- On-screen (touch) controls: chosen per device, not per account ----------------------
+    // "auto" (default) shows them on touch screens until a controller or keyboard is used;
+    // "on" / "off" are the player's explicit choice for this device.
+    var TOUCH_KEY = 'jellyemu-touch-controls';
+
+    JE.getTouchControlsMode = function () {
+        try {
+            var v = global.localStorage.getItem(TOUCH_KEY);
+            return v === 'on' || v === 'off' ? v : 'auto';
+        } catch (e) { return 'auto'; }
+    };
+
+    JE.setTouchControlsMode = function (mode) {
+        try { global.localStorage.setItem(TOUCH_KEY, mode === 'on' || mode === 'off' ? mode : 'auto'); } catch (e) { /* ignore */ }
+    };
+
+    /** A touch screen is the main input (phones, tablets), not just a touch-capable laptop. */
+    JE.isTouchDevice = function () {
+        try {
+            return (global.navigator.maxTouchPoints || 0) > 0 &&
+                !!(global.matchMedia && global.matchMedia('(pointer: coarse)').matches);
+        } catch (e) { return false; }
+    };
+
+    /** Whether on-screen controls should start visible on this device. */
+    JE.touchControlsWanted = function () {
+        var mode = JE.getTouchControlsMode();
+        return mode === 'on' || (mode === 'auto' && JE.isTouchDevice());
+    };
+
 })(typeof window !== 'undefined' ? window : this);
 

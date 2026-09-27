@@ -264,6 +264,23 @@
         if (open) closeMenu(); else openMenu();
     };
 
+    // Keyboard (and TV remote) navigation while the menu is open. Escape opens/closes the menu
+    // through its hotkey (ejs.input.js); here it only closes an open panel. Key events the host
+    // makes up for controller buttons (key "Unidentified") are ignored: the poller handles those.
+    var KEY_DIRECTIONS = { ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right' };
+    document.addEventListener('keydown', function (ev) {
+        if (!open || ev.key === 'Unidentified') return;
+        var t = ev.target;
+        if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA') && !/^(checkbox|radio|range)$/i.test(t.type || '')) return;
+        var handled = true;
+        if (KEY_DIRECTIONS[ev.key]) direction(KEY_DIRECTIONS[ev.key]);
+        else if (ev.key === 'Enter' || ev.key === ' ') activate();
+        else if (ev.key === 'Backspace') back();
+        else if (ev.key === 'Escape' && activePopup()) back();
+        else handled = false;
+        if (handled) { ev.preventDefault(); ev.stopImmediatePropagation(); }
+    }, true);
+
     function poll() {
         requestAnimationFrame(poll);
         if (!open && !window._jeMenuHold) return;

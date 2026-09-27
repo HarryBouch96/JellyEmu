@@ -225,6 +225,15 @@
                     return list.map(opt => `<option value="${opt.id}" ${String(opt.id) === String(active) ? 'selected' : ''}>${opt.label}</option>`).join('');
                 };
 
+                // On-screen controls are chosen per device (same key the game and stream pages read).
+                const TOUCH_KEY = 'jellyemu-touch-controls';
+                const getTouchMode = () => {
+                    try { const v = localStorage.getItem(TOUCH_KEY); return v === 'on' || v === 'off' ? v : 'auto'; } catch (e) { return 'auto'; }
+                };
+                const renderTouchModeOptions = () => renderOptions(
+                    [{ id: 'auto', label: 'Automatic' }, { id: 'on', label: 'Always show' }, { id: 'off', label: 'Never show' }],
+                    getTouchMode());
+
                 container.innerHTML = `
                     <div class="je-settings-section">
                         <h2 class="je-settings-section-heading">
@@ -325,11 +334,11 @@
                             </div>
 
                             <div class="je-input-container">
-                                <label class="je-input-label">On-Screen Mobile Gamepad</label>
+                                <label class="je-input-label">On-Screen Controls (this device)</label>
                                 <select id="je-pref-vg" class="je-select">
-                                    ${renderOptions(_settingOptions.virtualGamepad, p.virtualGamepad || '0')}
+                                    ${renderTouchModeOptions()}
                                 </select>
-                                <div class="je-field-desc">Touchscreen controls overlay for mobile devices.</div>
+                                <div class="je-field-desc">Touchscreen controls, in the browser and when streaming. Saved for this device only. Automatic shows them on touch screens until a controller or keyboard is used.</div>
                             </div>
 
                             <div class="je-input-container">
@@ -351,6 +360,7 @@
 
                 const saveBtn = container.querySelector('#je-save-global');
                 saveBtn.addEventListener('click', () => {
+                    try { localStorage.setItem(TOUCH_KEY, container.querySelector('#je-pref-vg').value); } catch (e) { /* ignore */ }
                     saveBtn.disabled = true;
                     saveBtn.innerHTML = `<span class="material-icons" style="font-size:18px">sync</span> Saving...`;
 
@@ -368,7 +378,6 @@
                             smrate: container.querySelector('#je-pref-smrate').value,
                             autosave: container.querySelector('#je-pref-autosave').value,
                             haptics: container.querySelector('#je-pref-haptics').value,
-                            virtualGamepad: container.querySelector('#je-pref-vg').value,
                             virtualGamepadLefty: container.querySelector('#je-pref-vg-lefty').value
                         }
                     };

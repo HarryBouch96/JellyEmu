@@ -808,12 +808,16 @@
         setTimeout(_jeDisableEjsControls, 500);
         setTimeout(_jeDisableEjsControls, 1500);
 
+        var _jeWatching = false; // see _jeWatchForPhysicalInput
         function _jeApplyVirtualControls(attemptsLeft) {
             var e = emu();
             if (e && e.started && e.toggleVirtualGamepad && e.toggleVirtualGamepadLeftHanded) {
                 var jeCfg = window.JellyEmuConfig || {};
-                var showVg = jeCfg.virtualGamepad === 'true';
+                // On-screen controls are chosen per device ("auto": shown on touch screens).
+                var showVg = window.JellyEmu && JellyEmu.touchControlsWanted ? JellyEmu.touchControlsWanted() : false;
                 var leftyVg = jeCfg.virtualGamepadLefty === 'true';
+                window._jeVgVisible = showVg;
+                _jeWatchForPhysicalInput();
                 
                 console.log('[JellyEmu] Applying virtual controls preference:', showVg, 'lefty:', leftyVg);
                 e.toggleVirtualGamepad(showVg);
@@ -830,6 +834,33 @@
             }
         }
         _jeApplyVirtualControls(100);
+
+        // "auto" mode: hide the on-screen controls as soon as a controller or keyboard is used.
+        function _jeWatchForPhysicalInput() {
+            if (_jeWatching || !window._jeVgVisible || !window.JellyEmu || JellyEmu.getTouchControlsMode() !== 'auto') return;
+            _jeWatching = true;
+            function hide(reason) {
+                if (!window._jeVgVisible) return;
+                var e = emu();
+                if (e && e.toggleVirtualGamepad) e.toggleVirtualGamepad(false);
+                window._jeVgVisible = false;
+                console.log('[JellyEmu] Hiding on-screen controls (' + reason + ' used)');
+                if (window._jeSyncVGToggles) window._jeSyncVGToggles();
+            }
+            document.addEventListener('keydown', function (ev) {
+                if (ev.key && ev.key !== 'Unidentified') hide('keyboard');
+            }, true);
+            (function poll() {
+                if (!window._jeVgVisible) return;
+                var pads = [];
+                try { pads = navigator.getGamepads ? navigator.getGamepads() : []; } catch (err) { /* ignore */ }
+                for (var i = 0; i < pads.length; i++) {
+                    var gp = pads[i];
+                    if (gp && gp.buttons && gp.buttons.some(function (b) { return b && b.pressed; })) { hide('controller'); return; }
+                }
+                requestAnimationFrame(poll);
+            })();
+        }
     });
 
     var _syncTimer = null;
@@ -1183,22 +1214,21 @@
     function syncVGTogglesLocal() {
         var jeCfg = window.JellyEmuConfig || {};
         var vgOn = document.getElementById('je-vg-toggle');
-        if (vgOn) vgOn.checked = jeCfg.virtualGamepad === 'true';
+        if (vgOn) vgOn.checked = !!window._jeVgVisible;
         var vgLefty = document.getElementById('je-vg-lefty');
         if (vgLefty) vgLefty.checked = jeCfg.virtualGamepadLefty === 'true';
     }
     window._jeSyncVGToggles = syncVGTogglesLocal;
 
+    // Left-handed layout is a per-account preference; whether the controls show is per device
+    // (see the toggle below and JellyEmu.touchControlsWanted).
     function _jeSyncVGPrefs() {
         if (!userId) return;
-        var vgOn = document.getElementById('je-vg-toggle');
         var vgLefty = document.getElementById('je-vg-lefty');
         var payload = {
-            virtualGamepad: vgOn ? String(vgOn.checked) : 'false',
             virtualGamepadLefty: vgLefty ? String(vgLefty.checked) : 'false'
         };
         if (window.JellyEmuConfig) {
-            window.JellyEmuConfig.virtualGamepad = payload.virtualGamepad;
             window.JellyEmuConfig.virtualGamepadLefty = payload.virtualGamepadLefty;
         }
         jeFetch('/jellyemu/prefs/' + userId, {
@@ -1215,7 +1245,9 @@
             if (e && e.toggleVirtualGamepad) {
                 e.toggleVirtualGamepad(this.checked);
             }
-            _jeSyncVGPrefs();
+            // An explicit choice, remembered for this device only.
+            window._jeVgVisible = this.checked;
+            if (window.JellyEmu && JellyEmu.setTouchControlsMode) JellyEmu.setTouchControlsMode(this.checked ? 'on' : 'off');
         });
     }
 
