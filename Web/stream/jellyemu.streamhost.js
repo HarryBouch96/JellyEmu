@@ -226,8 +226,10 @@
         // so a host that also turns a controller press into a click can't press one twice.
         try { loadingEl.querySelector('.je-card').focus({ preventScroll: true }); } catch (e) { /* ignore */ }
         setLoadingFocus(0);
-        var gp = firstPad();
-        loadingPrev = { a: pressed(gp, 0), b: pressed(gp, 1), dir: loadingDirection(gp) };
+        // Buttons count only once seen released: the press that started the game (or closed the
+        // previous screen) may still be held, and on some devices the controller only becomes
+        // visible to the page when it's next used.
+        loadingPrev = { a: true, b: true, dir: 'held' };
         loadingNextAt = Date.now() + 400;
         requestAnimationFrame(pollLoading);
         if (!loadingError && !slowTimer) {
@@ -296,11 +298,13 @@
         requestAnimationFrame(pollLoading);
         if (menuOpen) return;
         var gp = firstPad();
+        if (!gp) return;   // not seen yet: nothing is "released" until it is
         var a = pressed(gp, 0), b = pressed(gp, 1), dir = loadingDirection(gp);
         if (a && !loadingPrev.a) activateLoading(loadingButtons[loadingFocus].getAttribute('data-act'));
         else if (b && !loadingPrev.b) activateLoading('cancel');
         var now = Date.now();
-        if (dir !== loadingPrev.dir) { if (dir) { setLoadingFocus(loadingFocus + dir); loadingNextAt = now + 400; } }
+        if (loadingPrev.dir === 'held') { loadingNextAt = now + 400; }   // first sight: a held direction doesn't move
+        else if (dir !== loadingPrev.dir) { if (dir) { setLoadingFocus(loadingFocus + dir); loadingNextAt = now + 400; } }
         else if (dir && now >= loadingNextAt) { setLoadingFocus(loadingFocus + dir); loadingNextAt = now + 180; }
         loadingPrev = { a: a, b: b, dir: dir };
     }
@@ -437,8 +441,8 @@
         releaseTouches();
         refreshMenu();
         menu.classList.add('je-open');
-        var gp = firstPad();
-        padPrev = { a: pressed(gp, 0), b: pressed(gp, 1), dir: padDirection(gp) };
+        // As on the loading screen: buttons already held (the combo) must be released first.
+        padPrev = { a: true, b: true, dir: 'held' };
         dirNextAt = Date.now() + 400;
         setFocus(0);
         try { panel.focus({ preventScroll: true }); } catch (e) { /* ignore */ }
@@ -474,6 +478,7 @@
     window.addEventListener('keydown', function (e) {
         if (e.key === 'Unidentified') return;
         if (loadingVisible && !menuOpen) {
+            if (e.repeat) { e.preventDefault(); return; }   // a key held from before, not a new press
             var used = true;
             if (/^Arrow(Left|Up)$/.test(e.key)) setLoadingFocus(loadingFocus - 1);
             else if (/^Arrow(Right|Down)$/.test(e.key) || e.key === 'Tab') setLoadingFocus(loadingFocus + 1);
@@ -511,11 +516,13 @@
     function pollMenu() {
         if (!menuOpen) return;
         var gp = firstPad();
+        if (!gp) { requestAnimationFrame(pollMenu); return; }
         var a = pressed(gp, 0), b = pressed(gp, 1), dir = padDirection(gp);
         if (a && !padPrev.a) activate(menuButtons[focusIndex].getAttribute('data-act'));
         else if (b && !padPrev.b) closeMenu();
         var now = Date.now();
-        if (dir !== padPrev.dir) { if (dir) { setFocus(focusIndex + dir); dirNextAt = now + 400; } }
+        if (padPrev.dir === 'held') { dirNextAt = now + 400; }   // first sight: a held direction doesn't move
+        else if (dir !== padPrev.dir) { if (dir) { setFocus(focusIndex + dir); dirNextAt = now + 400; } }
         else if (dir && now >= dirNextAt) { setFocus(focusIndex + dir); dirNextAt = now + 130; }
         padPrev = { a: a, b: b, dir: dir };
         if (menuOpen) requestAnimationFrame(pollMenu);
