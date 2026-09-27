@@ -155,7 +155,7 @@ namespace JellyEmu.Controllers
                   }
 
                   // Tell JellyEmu the stream is still open, so nobody else takes over the gaming PC.
-                  setInterval(function () { JellyEmu.fetch('/jellyemu/stream/heartbeat' + deviceQuery, { method: 'POST' }).catch(function () {}); }, 30000);
+                  setInterval(function () { JellyEmu.fetch('/jellyemu/stream/heartbeat' + deviceQuery, { method: 'POST' }).catch(function () {}); }, 15000);
                   window.addEventListener('blur', function () { log('top window blur (focus moved into iframe?)'); });
                   window.addEventListener('focus', function () { log('top window focus'); });
                   ['keydown'].forEach(function (n) { window.addEventListener(n, function (e) { log(n + ' key=' + e.key + ' keyCode=' + e.keyCode); }, true); });

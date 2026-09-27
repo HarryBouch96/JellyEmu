@@ -43,12 +43,17 @@ namespace JellyEmu.Services
 
         public record Status(bool Available, string Reason);
 
-        public static readonly TimeSpan BusyWindow = TimeSpan.FromSeconds(90);
+        /// <summary>
+        /// A stream page checks in every 15 seconds (see the stream page's heartbeat); a PC whose
+        /// stream hasn't checked in for this long is treated as free (e.g. the app was closed).
+        /// </summary>
+        public static readonly TimeSpan BusyWindow = TimeSpan.FromSeconds(45);
 
         /// <summary>
         /// Can <paramref name="userId"/> play <paramref name="platform"/> on this device now?
-        /// A game already running counts as busy only if someone else started it and their
-        /// stream page is still open (recent heartbeat); otherwise it gets quit to make room.
+        /// One player per gaming PC: while any stream on it is open (recent heartbeat), it's in
+        /// use, even for the same user on another screen. A game left running by a stream that
+        /// has gone away doesn't block it; that game gets quit to make room.
         /// </summary>
         public static Status Evaluate(Device device, string platform, Probe probe, string? currentUserId,
             DateTimeOffset currentLastSeen, string userId, DateTimeOffset now)
@@ -59,8 +64,8 @@ namespace JellyEmu.Services
                 case Probe.Offline: return new Status(false, "Offline");
                 case Probe.HostUnavailable: return new Status(false, "Not ready");
             }
-            if (currentUserId != null && currentUserId != userId && now - currentLastSeen < BusyWindow)
-                return new Status(false, "In use by someone else");
+            if (currentUserId != null && now - currentLastSeen < BusyWindow)
+                return new Status(false, currentUserId == userId ? "In use on another screen" : "In use by someone else");
             return new Status(true, string.Empty);
         }
     }

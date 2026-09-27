@@ -64,9 +64,27 @@ namespace JellyEmu.Tests
         }
 
         [Fact]
-        public void MyOwnRunningGame_IsAvailable()
+        public void MyOwnStreamOnAnotherScreen_IsInUse()
         {
-            Assert.True(Eval("PlayStation 2", Probe.Busy, currentUser: Me, secondsSinceSeen: 5).Available);
+            // One player per gaming PC, even for the same account (e.g. phone, then Xbox).
+            var status = Eval("PlayStation 2", Probe.Busy, currentUser: Me, secondsSinceSeen: 5);
+            Assert.False(status.Available);
+            Assert.Equal("In use on another screen", status.Reason);
+        }
+
+        [Fact]
+        public void MyOwnAbandonedStream_CanBeReplaced()
+        {
+            var stale = (int)JellyEmuStreamDevices.BusyWindow.TotalSeconds + 5;
+            Assert.True(Eval("PlayStation 2", Probe.Busy, currentUser: Me, secondsSinceSeen: stale).Available);
+        }
+
+        [Fact]
+        public void QuitStream_IsFreeImmediately()
+        {
+            // Quitting sets LastSeen to the minimum, so the PC is free straight away.
+            var status = JellyEmuStreamDevices.Evaluate(Laptop, "PlayStation 2", Probe.Free, Friend, DateTimeOffset.MinValue, Me, Now);
+            Assert.True(status.Available);
         }
     }
 }
