@@ -508,6 +508,25 @@ if (-not (Test-Current 'sunshine' $sunshineDir)) { Expand-Component 'sunshine' $
 Protect-Folder $sunshineDir 'RX'
 Protect-Folder $sunshineData 'RX'
 
+# The virtual monitor has to be a screen of its own. If Windows set it up as a copy of the main
+# screen (Duplicate), screen capture only sees the main screen: switch to Extend. Sunshine's own
+# tool lists the screens capture can see.
+$dxgiInfo = Join-Path $sunshineDir 'tools\dxgi-info.exe'
+if (-not ('JeDisplay' -as [type])) { Add-Type -Path (Join-Path $launcherDir 'VirtualDisplay.cs') }
+function Test-VirtualScreenCapturable {
+    $found = [JeDisplay]::FindVirtualDisplay()   # "x,y,w,h,\\.\DISPLAYn" or null
+    if (-not $found) { return $false }
+    $name = $found.Split(',')[4]
+    return [bool]((& $dxgiInfo 2>$null) | Where-Object { $_ -match ('Output Name\s*:\s*' + [regex]::Escape($name) + '\s*$') })
+}
+if (-not (Test-VirtualScreenCapturable)) {
+    Say 'The virtual monitor isn''t a screen of its own (probably mirroring the main one): switching Windows to Extend, like Windows key + P'
+    & "$env:WINDIR\System32\DisplaySwitch.exe" /extend
+    $ok = $false
+    for ($i = 0; $i -lt 10 -and -not ($ok = Test-VirtualScreenCapturable); $i++) { Start-Sleep -Seconds 1 }
+    if (-not $ok) { Warn 'Screen capture still can''t see the virtual monitor. Press Windows key + P, choose Extend, then run this setup again.' }
+}
+
 $sunshineConf = Join-Path $sunshineDir 'config\sunshine.conf'
 New-Item -ItemType Directory -Force -Path (Split-Path $sunshineConf) | Out-Null
 $outputName = $null
