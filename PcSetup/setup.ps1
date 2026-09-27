@@ -36,6 +36,12 @@ $SetupVersion = '1'
 function Step([string]$m) { Write-Host ''; Write-Host "== $m" -ForegroundColor Cyan }
 function Say([string]$m)  { Write-Host "   $m" }
 function Warn([string]$m) { Write-Host "   ! $m" -ForegroundColor Yellow; $script:warnings += $m }
+
+# UTF-8 without a byte-order mark. (Windows PowerShell's Set-Content -Encoding UTF8 adds one, and
+# the bridge's JSON reader, Sunshine and Dolphin don't expect it.)
+function Write-Text([string]$path, [string]$text) {
+    [IO.File]::WriteAllText($path, $text, (New-Object Text.UTF8Encoding $false))
+}
 $warnings = @()
 
 # ---- Administrator ----------------------------------------------------------------------------
@@ -66,7 +72,10 @@ $fwGroup     = 'JellyEmu'
 $bridgeUser  = 'JellyEmuStream'   # the bridge account Jellyfin's stream proxy signs in as
 $vddHardwareId = 'Root\MttVDD'
 $displayClass = [Guid]'4d36e968-e325-11ce-bfc1-08002be10318'
-$me = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+# The person using this PC: whoever is signed in at the screen. (If they aren't an administrator,
+# this setup runs under the administrator account that approved it, which isn't them.)
+$me = (Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue).UserName
+if (-not $me) { $me = [Security.Principal.WindowsIdentity]::GetCurrent().Name }
 
 # ---- Uninstall --------------------------------------------------------------------------------
 if ($Uninstall) {
@@ -246,7 +255,7 @@ if (-not $ps1Bios) { Warn 'No PlayStation BIOS in JellyEmu''s BIOS folder, so th
 # puts the window on the virtual monitor), with controls matching JellyEmu's controller.
 Set-Content -LiteralPath (Join-Path $pcsx2 'portable.txt') -Value '' -Encoding ASCII
 New-Item -ItemType Directory -Force -Path (Join-Path $pcsx2 'inis') | Out-Null
-@"
+Write-Text (Join-Path $pcsx2 'inis\PCSX2.ini') @"
 [UI]
 SettingsVersion = 1
 SetupWizardIncomplete = false
@@ -298,12 +307,12 @@ OpenPauseMenu = SDL-0/Back & SDL-0/Start
 
 [EmuCore/GS]
 upscale_multiplier = 2
-"@ | Set-Content -LiteralPath (Join-Path $pcsx2 'inis\PCSX2.ini') -Encoding UTF8
+"@
 
 Set-Content -LiteralPath (Join-Path $dolphin 'portable.txt') -Value '' -Encoding ASCII
 $dolphinConfig = Join-Path $dolphin 'User\Config'
 New-Item -ItemType Directory -Force -Path $dolphinConfig | Out-Null
-@"
+Write-Text (Join-Path $dolphinConfig 'Dolphin.ini') @"
 [Interface]
 ConfirmStop = False
 [Display]
@@ -318,8 +327,8 @@ UpdateTrack =
 SIDevice0 = 6
 [DSP]
 DSPThread = True
-"@ | Set-Content -LiteralPath (Join-Path $dolphinConfig 'Dolphin.ini') -Encoding UTF8
-@"
+"@
+Write-Text (Join-Path $dolphinConfig 'GCPadNew.ini') @"
 [GCPad1]
 Device = XInput/0/Gamepad
 Buttons/A = ``Button A``
@@ -345,11 +354,11 @@ D-Pad/Down = ``Pad S``
 D-Pad/Left = ``Pad W``
 D-Pad/Right = ``Pad E``
 Rumble/Motor = ``Motor L``
-"@ | Set-Content -LiteralPath (Join-Path $dolphinConfig 'GCPadNew.ini') -Encoding UTF8
-@"
+"@
+Write-Text (Join-Path $dolphinConfig 'GFX.ini') @"
 [Settings]
 InternalResolution = 2
-"@ | Set-Content -LiteralPath (Join-Path $dolphinConfig 'GFX.ini') -Encoding UTF8
+"@
 
 @'
 # Written by JellyEmu's setup; RetroArch is started by the JellyEmu launcher.
@@ -536,7 +545,7 @@ $apps = [ordered]@{
         )
     })
 }
-$apps | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $sunshineData 'apps.json') -Encoding UTF8
+Write-Text (Join-Path $sunshineData 'apps.json') ($apps | ConvertTo-Json -Depth 6)
 
 # Web API login, used once below to pair the bridge. New random password on every setup run.
 $sunshineUser = 'jellyemu'
@@ -609,10 +618,10 @@ $bridgeConfig = [ordered]@{
     }
     moonlight = [ordered]@{ default_http_port = 47989; pair_device_name = 'JellyEmu' }
     streamer_path = './streamer'
-    log = [ordered]@{ level_filter = 'INFO'; file_path = '../bridge.log'; dev_venator = $false }
+    log = [ordered]@{ level_filter = 'INFO'; file_path = 'bridge.log'; dev_venator = $false }
     default_settings = $null
 }
-$bridgeConfig | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $bridgeConfigFile -Encoding UTF8
+Write-Text $bridgeConfigFile ($bridgeConfig | ConvertTo-Json -Depth 6)
 
 # The stream page loads JellyEmu's stream layer (controls, menu, start screen) when it's embedded
 # in Jellyfin; it does nothing when the page is opened on its own.
@@ -635,7 +644,15 @@ Save-Config $config
 Start-ScheduledTask -TaskName $taskName   # starts the bridge as you (not as administrator)
 $bridge = "http://127.0.0.1:$($config.bridgePort)"
 for ($i = 0; $i -lt 30 -and (Test-PortFree $config.bridgePort); $i++) { Start-Sleep -Seconds 1 }
-if (Test-PortFree $config.bridgePort) { throw "The bridge didn't start (see $bridgeDir\bridge.log)" }
+if (Test-PortFree $config.bridgePort) {
+    # Everything that says why: the start-up task, the launcher that starts the bridge, the bridge.
+    $task = Get-ScheduledTaskInfo -TaskName $taskName -ErrorAction SilentlyContinue
+    Write-Host "   Start-up task (runs as $me): last result $('0x{0:X}' -f $task.LastTaskResult) at $($task.LastRunTime)"
+    foreach ($logFile in (Join-Path $launcherDir 'launcher.log'), (Join-Path $bridgeDir 'bridge.log'), (Join-Path $InstallDir 'bridge.log')) {
+        if (Test-Path -LiteralPath $logFile) { Write-Host "   --- $logFile"; Get-Content -LiteralPath $logFile -Tail 12 | ForEach-Object { Write-Host "   $_" } }
+    }
+    throw "The bridge didn't start"
+}
 
 $cookies = [JeHttp]::NewCookies()
 function Bridge([string]$method, [string]$path, $body = $null) {

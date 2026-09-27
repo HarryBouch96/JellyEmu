@@ -135,9 +135,10 @@ public static class JeHttp
         request.ReadWriteTimeout = timeoutMs;
         request.CookieContainer = cookies;
         request.Accept = "application/json";
-        if (basicUser != null)
+        // (PowerShell passes $null as "" to string parameters, so empty counts as none.)
+        if (!string.IsNullOrEmpty(basicUser))
             request.Headers["Authorization"] = "Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes(basicUser + ":" + basicPassword));
-        if (BridgeUser != null && uri.Scheme == "http")
+        if (!string.IsNullOrEmpty(BridgeUser) && uri.Scheme == "http")
             request.Headers["X-JellyEmu-Stream-User"] = BridgeUser;
         // Sunshine's web API has a self-signed certificate. Accept it only for this PC itself.
         if (uri.Scheme == "https" && IsLocal(uri))
@@ -147,7 +148,7 @@ public static class JeHttp
 
     static void WriteBody(HttpWebRequest request, string json)
     {
-        if (json == null) return;
+        if (string.IsNullOrEmpty(json)) return;
         byte[] body = Encoding.UTF8.GetBytes(json);
         request.ContentType = "application/json";
         request.ContentLength = body.Length;
