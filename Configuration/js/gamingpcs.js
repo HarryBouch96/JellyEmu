@@ -122,10 +122,13 @@
                     api('PATCH', '/jellyemu/stream/admin/pcs/' + encodeURIComponent(pc.id), { name: name }).then(load, function (e) { window.alert(e.message); });
                 });
                 remove.addEventListener('click', function () {
-                    if (!window.confirm('Remove ' + pc.name + '? Players won\'t see it any more and its key stops working. To remove the software from the PC itself, run its setup with -Uninstall.')) return;
+                    var question = pc.managed
+                        ? 'Remove ' + pc.name + '? Players won\'t see it any more and its key stops working. To remove the software from the PC itself, run its setup with -Uninstall.'
+                        : 'Remove ' + pc.name + '? Players won\'t see it any more. It was set up by hand, so nothing on the PC itself changes.';
+                    if (!window.confirm(question)) return;
                     api('DELETE', '/jellyemu/stream/admin/pcs/' + encodeURIComponent(pc.id)).then(load, function (e) { window.alert(e.message); });
                 });
-                list.appendChild(el('div', { className: 'je-gp-pc' }, [info, el('div', { style: 'display:flex;gap:6px;flex-shrink:0' }, pc.managed ? [rename, remove] : [rename])]));
+                list.appendChild(el('div', { className: 'je-gp-pc' }, [info, el('div', { style: 'display:flex;gap:6px;flex-shrink:0' }, [rename, remove])]));
             });
         }
 

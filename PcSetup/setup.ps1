@@ -25,6 +25,9 @@ param(
     [string]$Code,
     [string]$InstallDir = 'C:\JellyEmu',
     [switch]$Uninstall,
+    # With -Uninstall: also remove the Virtual Display Driver and ViGEmBus, even if this setup
+    # didn't install them (it always removes the ones it did install).
+    [switch]$RemoveDrivers,
     [switch]$Stage
 )
 
@@ -57,6 +60,7 @@ if (-not $isAdmin -and -not $Stage) {
     if ($Server) { $argList += @('-Server', "`"$Server`"") }
     if ($Code) { $argList += @('-Code', "`"$Code`"") }
     if ($Uninstall) { $argList += '-Uninstall' }
+    if ($RemoveDrivers) { $argList += '-RemoveDrivers' }
     Start-Process -FilePath 'powershell.exe' -Verb RunAs -ArgumentList $argList
     exit
 }
@@ -80,6 +84,18 @@ if (-not $me) { $me = [Security.Principal.WindowsIdentity]::GetCurrent().Name }
 # ---- Uninstall --------------------------------------------------------------------------------
 if ($Uninstall) {
     Step 'Removing JellyEmu from this PC'
+    # Which drivers this setup installed (it removes those; -RemoveDrivers removes them regardless).
+    $installedBefore = @{}
+    $installedJson = Join-Path $InstallDir 'jellyemu\installed.json'
+    if (Test-Path -LiteralPath $installedJson) {
+        (Get-Content -LiteralPath $installedJson -Raw | ConvertFrom-Json).PSObject.Properties | ForEach-Object { $installedBefore[$_.Name] = $_.Value }
+    }
+    # One last upload of the last game's saves, in case the game ended without one.
+    $launcherScript = Join-Path $InstallDir 'launcher\jellyemu-launch.ps1'
+    if (Test-Path -LiteralPath $launcherScript) {
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $launcherScript -SyncOnly
+        Say 'Saves synced with the server'
+    }
     $svc = Get-CimInstance Win32_Service -Filter "Name='$serviceName'" -ErrorAction SilentlyContinue
     if ($svc -and $svc.PathName -like "*$InstallDir*") {
         Stop-Service $serviceName -Force -ErrorAction SilentlyContinue
@@ -93,10 +109,34 @@ if ($Uninstall) {
     Start-Sleep -Seconds 2
     if (Test-Path -LiteralPath $InstallDir) { Remove-Item -LiteralPath $InstallDir -Recurse -Force }
     Say "Removed $InstallDir"
+
+    $kept = @()
+    if ($RemoveDrivers -or $installedBefore['driver-vdd']) {
+        Get-PnpDevice -ErrorAction SilentlyContinue | Where-Object { $_.HardwareID -contains $vddHardwareId } |
+            ForEach-Object { pnputil /remove-device $_.InstanceId | Out-Null }
+        # Its driver package, by original name (Windows renames it oemNN.inf).
+        $packages = (pnputil /enum-drivers | Out-String) -split "(\r?\n){2,}" | Where-Object { $_ -match 'Original Name:\s*mttvdd\.inf' }
+        foreach ($p in $packages) {
+            if ($p -match 'Published Name:\s*(oem\d+\.inf)') { pnputil /delete-driver $Matches[1] /uninstall /force | Out-Null }
+        }
+        Remove-Item -LiteralPath 'C:\VirtualDisplayDriver' -Recurse -Force -ErrorAction SilentlyContinue
+        Say 'Removed the Virtual Display Driver'
+    } else { $kept += 'the Virtual Display Driver' }
+    if ($RemoveDrivers -or $installedBefore['driver-vigembus']) {
+        $entry = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*', 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue |
+            Where-Object { $_.DisplayName -match 'ViGEm|Virtual Gamepad Emulation' } | Select-Object -First 1
+        if ($entry -and $entry.UninstallString -match '\{[0-9A-Fa-f-]{36}\}') {
+            $p = Start-Process msiexec.exe -ArgumentList '/x', $Matches[0], '/qn', '/norestart' -Wait -PassThru
+            if ($p.ExitCode -in 0, 3010) { Say 'Removed ViGEmBus' } else { Warn "ViGEmBus didn't uninstall (exit code $($p.ExitCode)): remove it in Settings > Apps" }
+        } elseif ($entry) { Warn "Remove ViGEmBus in Settings > Apps ($($entry.DisplayName))" }
+    } else { $kept += 'ViGEmBus' }
+
     Write-Host ''
     Write-Host 'Done. Saves are kept on the Jellyfin server. Remove this PC in JellyEmu''s Gaming PCs settings too.'
-    Write-Host 'The Virtual Display Driver and ViGEmBus were left installed (other programs may use them);'
-    Write-Host 'remove them in Device Manager and Apps if nothing else needs them.'
+    if ($kept.Count) {
+        Write-Host "Left installed because this setup didn't install them (other programs may use them): $($kept -join ' and ')."
+        Write-Host 'Run with -Uninstall -RemoveDrivers to remove them anyway.'
+    }
     exit
 }
 
@@ -429,6 +469,8 @@ if (-not (Get-Service ViGEmBus -ErrorAction SilentlyContinue)) {
     }
     if ($p.ExitCode -eq 1618) { throw 'Windows was busy installing something else for 10 minutes. Let Windows Update finish (or restart the PC), then run this setup again.' }
     if ($p.ExitCode -notin 0, 3010) { throw "ViGEmBus setup failed (exit code $($p.ExitCode))" }
+    $installed['driver-vigembus'] = '1'   # so -Uninstall removes it again
+    $installed | ConvertTo-Json | Set-Content -LiteralPath $installedFile -Encoding UTF8
 } else { Say 'ViGEmBus is already installed' }
 
 if (-not ('JeDriver' -as [type])) {
@@ -484,6 +526,8 @@ if ($vdd -and (Test-HasDriver $vdd)) {
     }
     if ($code -eq 3010) { Warn 'Windows wants a restart to finish installing the display driver. Restart, then run this setup again.' }
     Say 'Installed the Virtual Display Driver'
+    $installed['driver-vdd'] = '1'   # so -Uninstall removes it again
+    $installed | ConvertTo-Json | Set-Content -LiteralPath $installedFile -Encoding UTF8
 }
 # Extra driverless devices left by failed attempts.
 Get-VirtualDisplays | Where-Object { $_.InstanceId -ne $vdd.InstanceId -and -not (Test-HasDriver $_) } |
@@ -496,7 +540,14 @@ function Test-PortFree([int]$port) { -not (Get-NetTCPConnection -LocalPort $port
 $sunshineDir = Join-Path $InstallDir 'sunshine'
 $sunshineData = Join-Path $InstallDir 'sunshine-data'
 $service = Get-Service $serviceName -ErrorAction SilentlyContinue
-if ($service) { Stop-Service $serviceName -Force; Start-Sleep -Seconds 2 }
+if ($service) {
+    # Only ever take over this install's own service, never one set up some other way.
+    $servicePath = (Get-CimInstance Win32_Service -Filter "Name='$serviceName'").PathName
+    if ($servicePath -notlike "*$InstallDir*") {
+        throw "A '$serviceName' service from another install already exists ($servicePath). Remove or archive that install first, then run this setup again."
+    }
+    Stop-Service $serviceName -Force; Start-Sleep -Seconds 2
+}
 
 if (-not $config.sunshinePort) {
     # Its own ports, clear of a normal Sunshine (47989) and each other (Sunshine uses port-5 .. port+21).
