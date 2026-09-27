@@ -30,7 +30,9 @@ namespace JellyEmu.Controllers
     ///   GET/POST /jellyemu/stream/save                   - that launcher syncs the game's in-game save
     ///   GET/POST /jellyemu/stream/saveset/{name}         - ... and the player's memory cards (PS2, GameCube)
     ///   GET  /jellyemu/stream/platforms                  - platforms any PC can stream (UI shows Play)
-    /// Settings: {DataPath}/jellyemu-stream.json. Launcher key: {DataPath}/jellyemu-launcher.key.
+    /// Settings: {DataPath}/jellyemu-stream.json (JellyEmuStreamStore). PCs added with the setup script
+    /// (JellyEmuStreamPcController) have their own key; PCs set up by hand share
+    /// {DataPath}/jellyemu-launcher.key.
     /// </summary>
     public class JellyEmuStreamController : JellyEmuBaseController
     {
@@ -90,8 +92,9 @@ namespace JellyEmu.Controllers
             if (!IsValidId(itemId) || string.IsNullOrEmpty(userId)) return BadRequest();
             var item = LibraryManager.GetItemById(itemId);
             if (item == null) return NotFound();
+            var settings = ReadSettings();
             var target = FindDevice(device);
-            if (target == null) return StatusCode(StatusCodes.Status503ServiceUnavailable, "No gaming PC is set up for streaming.");
+            if (settings == null || target == null) return StatusCode(StatusCodes.Status503ServiceUnavailable, "No gaming PC is set up for streaming.");
 
             var now = DateTimeOffset.UtcNow;
             var probe = await ProbeDevice(target, fresh: true).ConfigureAwait(false);
@@ -119,11 +122,11 @@ namespace JellyEmu.Controllers
             });
 
             var pass = new JellyEmuStreamAuth.Claims("pass", userId, itemId, target.HostId, target.AppId,
-                now.Add(JellyEmuStreamAuth.PassLifetime).ToUnixTimeSeconds(), JellyEmuStreamAuth.NewNonce());
+                now.Add(JellyEmuStreamAuth.PassLifetime).ToUnixTimeSeconds(), JellyEmuStreamAuth.NewNonce(), target.Id);
             var token = JellyEmuStreamAuth.Sign(pass, GetKey());
             Logger.LogInformation("[JellyEmu] Stream pass issued for user {UserId} item {ItemId} on {Device}",
                 SanitizeForLog(userId), SanitizeForLog(itemId), SanitizeForLog(target.Id));
-            return Ok(new { url = $"{target.StreamOrigin.TrimEnd('/')}/jellyemu-auth?pass={Uri.EscapeDataString(token)}" });
+            return Ok(new { url = $"{target.OriginIn(settings)}/jellyemu-auth?pass={Uri.EscapeDataString(token)}" });
         }
 
         [HttpGet("/jellyemu/stream/login")]
@@ -139,7 +142,7 @@ namespace JellyEmu.Controllers
             }
 
             var item = LibraryManager.GetItemById(claims.ItemId);
-            var device = ReadSettings()?.Devices.FirstOrDefault(d => d.HostId == claims.HostId);
+            var device = SessionDevice(claims);
             if (item == null || device == null) return NotFound();
             WriteCurrent(device.Id, new CurrentGame
             {
@@ -188,12 +191,18 @@ namespace JellyEmu.Controllers
                     SanitizeForLog(method), SanitizeForLog(uri), SanitizeForLog(session.UserId));
                 return StatusCode(StatusCodes.Status403Forbidden);
             }
+            var device = SessionDevice(session);
+            var upstream = device == null ? null : JellyEmuStreamDevices.Upstream(device);
+            if (upstream == null)
+            {
+                Logger.LogWarning("[JellyEmu] Stream request refused: the session's gaming PC is no longer set up");
+                return StatusCode(StatusCodes.Status403Forbidden);
+            }
             // Starting (or reconnecting) the stream itself also needs the session to be the PC's
             // current reservation, so an older session cookie can't bypass "one player per PC".
             if (JellyEmuStreamAuth.IsStreamConnection(uri))
             {
-                var device = ReadSettings()?.Devices.FirstOrDefault(d => d.HostId == session.HostId);
-                var current = device == null ? null : ReadCurrent(device.Id);
+                var current = ReadCurrent(device!.Id);
                 if (current == null || current.UserId != session.UserId || current.ItemId != session.ItemId
                     || DateTimeOffset.UtcNow - current.LastSeen >= JellyEmuStreamDevices.BusyWindow)
                 {
@@ -202,7 +211,19 @@ namespace JellyEmu.Controllers
                 }
             }
             Response.Headers[JellyEmuStreamAuth.UserHeader] = BridgeUser;
+            // Which PC's bridge Caddy sends this request to (one stream address for every PC).
+            Response.Headers[JellyEmuStreamAuth.UpstreamHeader] = upstream;
             return Ok();
+        }
+
+        /// <summary>The gaming PC a pass or session is for.</summary>
+        private Device? SessionDevice(JellyEmuStreamAuth.Claims claims)
+        {
+            var devices = ReadSettings()?.Devices;
+            if (devices == null) return null;
+            return claims.Device != null
+                ? devices.FirstOrDefault(d => string.Equals(d.Id, claims.Device, StringComparison.OrdinalIgnoreCase))
+                : devices.FirstOrDefault(d => d.HostId == claims.HostId && !d.Managed);
         }
 
         /// <summary>
@@ -251,20 +272,22 @@ namespace JellyEmu.Controllers
 
         /// <summary>
         /// Called by a gaming PC's launcher (its single "JellyEmu" Sunshine app) to find out which
-        /// game to start. Requires the shared launcher key; X-JellyEmu-Device names the PC.
+        /// game to start. X-JellyEmu-Device names the PC; X-JellyEmu-Launcher-Key is its key.
         /// </summary>
         [HttpGet("/jellyemu/stream/launch")]
         [AllowAnonymous]
         public IActionResult Launch()
         {
-            if (!LauncherKeyValid()) return Unauthorized();
-            var target = FindDevice(Request.Headers["X-JellyEmu-Device"].ToString());
-            var current = target == null ? null : ReadCurrent(target.Id);
+            var target = AuthenticatedPc();
+            if (target == null) return Unauthorized();
+            var current = ReadCurrent(target.Id);
             if (current == null) return NotFound();
             Logger.LogInformation("[JellyEmu] Launcher on {Device} starting {Name} ({Platform})",
-                SanitizeForLog(target!.Id), SanitizeForLog(current.Name), SanitizeForLog(current.Platform));
+                SanitizeForLog(target.Id), SanitizeForLog(current.Name), SanitizeForLog(current.Platform));
             // userId lets the launcher tell whose saves are on the PC (several people may use it).
-            return Ok(new { itemId = current.ItemId, userId = current.UserId, name = current.Name, platform = current.Platform, path = current.Path });
+            // pcPath: the game's folder as the PC reaches it (library paths in the settings).
+            var pcPath = ReadSettings() is { } settings ? JellyEmuStreamDevices.ToPcPath(settings, current.Path) : null;
+            return Ok(new { itemId = current.ItemId, userId = current.UserId, name = current.Name, platform = current.Platform, path = current.Path, pcPath });
         }
 
         /// <summary>
@@ -278,7 +301,7 @@ namespace JellyEmu.Controllers
         [DisableRequestSizeLimit]
         public async Task<IActionResult> Save()
         {
-            if (!LauncherKeyValid()) return Unauthorized();
+            if (AuthenticatedPc() == null) return Unauthorized();
             var owner = SaveOwner();
             if (owner == null) return NotFound();
             var (userId, itemId, device) = owner.Value;
@@ -313,7 +336,7 @@ namespace JellyEmu.Controllers
         /// </summary>
         private (string UserId, string ItemId, string Device)? SaveOwner()
         {
-            var target = FindDevice(Request.Headers["X-JellyEmu-Device"].ToString());
+            var target = FindDevice(Request.Headers["X-JellyEmu-Device"].ToString(), fallbackToFirst: false);
             if (target == null) return null;
             var userId = Request.Headers["X-JellyEmu-Player"].ToString();
             var itemId = Request.Headers["X-JellyEmu-Item"].ToString();
@@ -346,7 +369,7 @@ namespace JellyEmu.Controllers
         [DisableRequestSizeLimit]
         public async Task<IActionResult> SaveSet(string name)
         {
-            if (!LauncherKeyValid()) return Unauthorized();
+            if (AuthenticatedPc() == null) return Unauthorized();
             if (!SaveSets.Contains(name)) return NotFound();
             var owner = SaveOwner();
             if (owner == null) return NotFound();
@@ -375,13 +398,25 @@ namespace JellyEmu.Controllers
             return NoContent();
         }
 
-        private bool LauncherKeyValid()
+        /// <summary>
+        /// The gaming PC a launcher request comes from (X-JellyEmu-Device), if its key is right: the
+        /// PC's own key for PCs added with the setup script, the shared launcher key for PCs set up
+        /// by hand. Null otherwise.
+        /// </summary>
+        private Device? AuthenticatedPc()
         {
-            var expected = ReadLauncherKey();
+            var device = FindDevice(Request.Headers["X-JellyEmu-Device"].ToString(), fallbackToFirst: false);
             var given = Request.Headers["X-JellyEmu-Launcher-Key"].ToString();
-            var ok = expected != null && CryptographicOperations.FixedTimeEquals(Encoding.UTF8.GetBytes(given), Encoding.UTF8.GetBytes(expected));
-            if (!ok) Logger.LogWarning("[JellyEmu] Launcher request refused: bad key");
-            return ok;
+            bool ok;
+            if (device == null) ok = false;
+            else if (device.Managed) ok = JellyEmuStreamDevices.KeyMatches(device, given);
+            else
+            {
+                var expected = ReadLauncherKey();
+                ok = expected != null && CryptographicOperations.FixedTimeEquals(Encoding.UTF8.GetBytes(given), Encoding.UTF8.GetBytes(expected));
+            }
+            if (!ok) Logger.LogWarning("[JellyEmu] Launcher request refused: unknown PC or bad key");
+            return ok ? device : null;
         }
 
         /// <summary>Asks the PC's bridge whether its Sunshine is reachable and free. Cached briefly.</summary>
@@ -391,10 +426,18 @@ namespace JellyEmu.Controllers
             if (!fresh && ProbeCache.TryGetValue(device.Id, out var cached) && now - cached.At < ProbeCacheFor)
                 return cached.Result;
 
+            var result = await ProbeBridge(HttpClientFactory, device).ConfigureAwait(false);
+            ProbeCache[device.Id] = (result, now);
+            return result;
+        }
+
+        /// <summary>Asks the PC's bridge whether its Sunshine is reachable and free (no caching).</summary>
+        internal static async Task<Probe> ProbeBridge(IHttpClientFactory httpClientFactory, Device device)
+        {
             Probe result;
             try
             {
-                using var client = HttpClientFactory.CreateClient();
+                using var client = httpClientFactory.CreateClient();
                 client.Timeout = TimeSpan.FromSeconds(3);
                 using var request = new HttpRequestMessage(HttpMethod.Get, $"{device.BridgeUrl.TrimEnd('/')}/api/host?host_id={device.HostId}");
                 request.Headers.Add(JellyEmuStreamAuth.UserHeader, BridgeUser);
@@ -422,7 +465,6 @@ namespace JellyEmu.Controllers
             {
                 result = Probe.HostUnavailable;
             }
-            ProbeCache[device.Id] = (result, now);
             return result;
         }
 
@@ -450,12 +492,13 @@ namespace JellyEmu.Controllers
         private string? CurrentUserId() =>
             User.FindFirstValue("Jellyfin-UserId") ?? User.FindFirstValue(ClaimTypes.NameIdentifier);
 
-        /// <summary>The named device, or the first one when no name is given.</summary>
-        private Device? FindDevice(string? id)
+        /// <summary>The named device, or (unless told not to) the first one when no name is given.</summary>
+        private Device? FindDevice(string? id, bool fallbackToFirst = true)
         {
             var devices = ReadSettings()?.Devices;
             if (devices == null || devices.Count == 0) return null;
-            return string.IsNullOrEmpty(id) ? devices[0] : devices.FirstOrDefault(d => string.Equals(d.Id, id, StringComparison.OrdinalIgnoreCase));
+            if (string.IsNullOrEmpty(id)) return fallbackToFirst ? devices[0] : null;
+            return devices.FirstOrDefault(d => string.Equals(d.Id, id, StringComparison.OrdinalIgnoreCase));
         }
 
         /// <summary>Platforms streamed from a gaming PC instead of played in the browser.</summary>
@@ -479,22 +522,7 @@ namespace JellyEmu.Controllers
 
         private JellyEmuStreamDevices.Settings? ReadSettings() => ReadSettings(AppPaths);
 
-        private static JellyEmuStreamDevices.Settings? ReadSettings(IApplicationPaths appPaths)
-        {
-            var file = Path.Combine(appPaths.DataPath, "jellyemu-stream.json");
-            if (!System.IO.File.Exists(file)) return null;
-            try
-            {
-                var s = JsonSerializer.Deserialize<JellyEmuStreamDevices.Settings>(System.IO.File.ReadAllText(file), new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
-                if (s == null) return null;
-                s.Devices = s.Devices.Where(d => IsValidDeviceId(d.Id) && !string.IsNullOrEmpty(d.StreamOrigin) && !string.IsNullOrEmpty(d.BridgeUrl)).ToList();
-                return s;
-            }
-            catch (JsonException) { return null; }
-        }
-
-        private static bool IsValidDeviceId(string id) =>
-            !string.IsNullOrEmpty(id) && id.Length <= 32 && id.All(c => char.IsAsciiLetterOrDigit(c) || c == '-');
+        private static JellyEmuStreamDevices.Settings? ReadSettings(IApplicationPaths appPaths) => JellyEmuStreamStore.Read(appPaths);
 
         private string CurrentFile(string deviceId) => Path.Combine(AppPaths.DataPath, $"jellyemu-stream-current-{deviceId}.json");
 

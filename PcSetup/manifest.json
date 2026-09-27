@@ -1,0 +1,50 @@
+{
+  "note": "Everything the gaming PC setup (setup.ps1) downloads: fixed versions from each project's official releases, checked against these SHA-256 hashes before use.",
+  "components": {
+    "7zr": {
+      "label": "7-Zip (extractor)", "version": "26.03", "file": "7zr-26.03.exe",
+      "url": "https://github.com/ip7z/7zip/releases/download/26.03/7zr.exe",
+      "sha256": "ad4c82fadcbdf93c03b4fc440f300509c7d60c5c2f4d183e35d9d70d6957037d"
+    },
+    "sunshine": {
+      "label": "Sunshine", "version": "2026.914.233613", "file": "Sunshine-Windows-AMD64-lite-2026.914.233613.zip",
+      "url": "https://github.com/LizardByte/Sunshine/releases/download/v2026.914.233613/Sunshine-Windows-AMD64-lite.zip",
+      "sha256": "233008e46f4c0e501a586cbfd6c4fd4a4c0d414a0b5fc7f13c070eb92ec3824b"
+    },
+    "vigembus": {
+      "label": "ViGEmBus (controller driver)", "version": "1.22.0", "file": "ViGEmBus_1.22.0_x64_x86_arm64.exe",
+      "url": "https://github.com/nefarius/ViGEmBus/releases/download/v1.22.0/ViGEmBus_1.22.0_x64_x86_arm64.exe",
+      "sha256": "89220a7865076b342892f98865f3499fb7c4cfd673159e89d352c360fd014c6a"
+    },
+    "vdd": {
+      "label": "Virtual Display Driver", "version": "24.12.24", "file": "Signed-Driver-v24.12.24-x64.zip",
+      "url": "https://github.com/VirtualDrivers/Virtual-Display-Driver/releases/download/25.5.2/Signed-Driver-v24.12.24-x64.zip",
+      "sha256": "f93e7ce3d640c83c419b1b72d2c83b2d8e34d83e8b7ba11f3328a40d2da82fa4"
+    },
+    "bridge": {
+      "label": "moonlight-web-stream (bridge)", "version": "2.10.0", "file": "moonlight-web-2.10.0-x86_64-pc-windows-gnu.zip",
+      "url": "https://github.com/MrCreativ3001/moonlight-web-stream/releases/download/v2.10.0/moonlight-web-x86_64-pc-windows-gnu.zip",
+      "sha256": "1dc3019952c610fbd7deb76dc84e3c4c6f26458ebb44823ea1f02ad883a36da9"
+    },
+    "pcsx2": {
+      "label": "PCSX2", "version": "2.8.2", "file": "pcsx2-v2.8.2-windows-x64-Qt.7z",
+      "url": "https://github.com/PCSX2/pcsx2/releases/download/v2.8.2/pcsx2-v2.8.2-windows-x64-Qt.7z",
+      "sha256": "7dfc829ca1994cc1045ac49f05e39b6cf968b72e6a374c40e05c2a2b4ac200b4"
+    },
+    "dolphin": {
+      "label": "Dolphin", "version": "2609", "file": "dolphin-2609-x64.7z",
+      "url": "https://dl.dolphin-emu.org/releases/2609/dolphin-2609-x64.7z",
+      "sha256": "1aa25785b7d4cb76259754c5fbcdd8856857b8e7bb4e523c57a8ac56665fba75"
+    },
+    "retroarch": {
+      "label": "RetroArch", "version": "1.22.2", "file": "RetroArch-1.22.2.7z",
+      "url": "https://buildbot.libretro.com/stable/1.22.2/windows/x86_64/RetroArch.7z",
+      "sha256": "b2139b1d0f9d4526dc6b5ce23cbb3efdc766096fa6f2c3df016818b486ac6372"
+    },
+    "retroarch-cores": {
+      "label": "RetroArch cores (mGBA, Gambatte, SwanStation)", "version": "1.22.2", "file": "RetroArch_cores-1.22.2.7z",
+      "url": "https://buildbot.libretro.com/stable/1.22.2/windows/x86_64/RetroArch_cores.7z",
+      "sha256": "86b871e11b9b4772ac644b40a38f2c8e9449da1f355eae7da08aa061148547b0"
+    }
+  }
+}

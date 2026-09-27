@@ -28,6 +28,10 @@
                     <span class="material-icons">settings</span>
                     <span>Settings</span>
                 </button>
+                <button type="button" class="je-tab-btn" data-tab="gamingpcs" onclick="jeSwitchTab('gamingpcs')">
+                    <span class="material-icons">sports_esports</span>
+                    <span>Gaming PCs</span>
+                </button>
                 <button type="button" class="je-tab-btn" data-tab="marketplace" onclick="jeSwitchTab('marketplace')">
                     <span class="material-icons">shopping_bag</span>
                     <span>Marketplace</span>
@@ -698,6 +702,7 @@
             var scripts = [
                 getUrl('/jellyemu/config/js/settings'),
                 getUrl('/jellyemu/config/js/community'),
+                getUrl('/jellyemu/config/js/gamingpcs'),
                 getUrl('/jellyemu/config/js/configRouter')
             ];
 

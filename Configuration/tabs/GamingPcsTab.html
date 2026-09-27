@@ -1,0 +1,85 @@
+<div id="je-gpcs" style="max-width: 900px;">
+    <style>
+        #je-gpcs h4 { margin: 0 0 6px 0; font-size: 1.05em; font-weight: 600; color: #fff; }
+        #je-gpcs .je-gp-desc { color: #aaa; margin: 0 0 1em; font-size: 0.9em; line-height: 1.45; }
+        #je-gpcs .je-gp-card { background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; padding: 1.2em 1.4em; margin-bottom: 1.4em; }
+        #je-gpcs input.emby-input { width: 100%; box-sizing: border-box; }
+        #je-gpcs .je-gp-row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+        #je-gpcs .je-gp-row input { flex: 1; min-width: 0; }
+        #je-gpcs .je-gp-btn { padding: 6px 16px; font-size: 0.85em; background: rgba(0,164,220,0.15); border: 1px solid rgba(0,164,220,0.3); border-radius: 4px; color: #fff; cursor: pointer; }
+        #je-gpcs .je-gp-btn.je-gp-quiet { background: rgba(255,255,255,0.06); border-color: rgba(255,255,255,0.12); }
+        #je-gpcs .je-gp-btn.je-gp-danger { background: rgba(220,60,60,0.12); border-color: rgba(220,60,60,0.35); }
+        #je-gpcs .je-gp-pc { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; padding: 12px 0; border-top: 1px solid rgba(255,255,255,0.06); }
+        #je-gpcs .je-gp-pc:first-child { border-top: 0; }
+        #je-gpcs .je-gp-name { font-weight: 600; color: #fff; display: flex; align-items: center; gap: 8px; }
+        #je-gpcs .je-gp-dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; background: #777; }
+        #je-gpcs .je-gp-meta { color: #999; font-size: 0.82em; margin-top: 4px; line-height: 1.5; }
+        #je-gpcs pre { background: #000; border: 1px solid rgba(255,255,255,0.12); border-radius: 6px; padding: 10px 12px; color: #ddd; font-size: 0.8em; white-space: pre-wrap; word-break: break-all; margin: 8px 0; }
+        #je-gpcs .je-gp-status { font-size: 0.82em; color: #aaa; margin-left: 10px; }
+        #je-gpcs details summary { cursor: pointer; color: #aaa; font-size: 0.88em; margin-top: 0.6em; }
+    </style>
+
+    <p class="je-gp-desc" style="font-size: 0.95em;">
+        Gaming PCs run games Jellyfin can't play in the browser (and any others you like) and stream them into
+        Jellyfin on any screen. Players pick one under "Play on" when they press Play.
+    </p>
+
+    <!-- Gaming PCs -->
+    <div class="je-gp-card">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.6em;">
+            <h4 style="margin: 0;">Gaming PCs</h4>
+            <button type="button" class="je-gp-btn je-gp-quiet" id="je-gp-refresh">Refresh</button>
+        </div>
+        <div id="je-gp-list"><p class="je-gp-desc">Loading…</p></div>
+    </div>
+
+    <!-- Add a gaming PC -->
+    <div class="je-gp-card">
+        <h4>Add a gaming PC</h4>
+        <p class="je-gp-desc">
+            Needs Windows 10 or 11 with a graphics card that can encode video (most from the last few years).
+            Name it, then run the command shown on that PC. It installs everything in C:\JellyEmu and asks for
+            administrator rights; your own copy of Sunshine, if you have one, is left alone.
+        </p>
+        <div class="je-gp-row">
+            <input type="text" id="je-gp-newname" class="emby-input" maxlength="40" placeholder="Name shown to players, e.g. Living room PC" />
+            <button type="button" class="je-gp-btn" id="je-gp-create">Create setup command</button>
+        </div>
+        <div id="je-gp-setup" style="display: none;">
+            <p class="je-gp-desc" style="margin: 0.8em 0 0;">Paste this into PowerShell on the new PC. The code in it works once, for 30 minutes.</p>
+            <pre id="je-gp-command"></pre>
+            <button type="button" class="je-gp-btn je-gp-quiet" id="je-gp-copy">Copy</button>
+            <span class="je-gp-status" id="je-gp-copied"></span>
+        </div>
+    </div>
+
+    <!-- Settings -->
+    <div class="je-gp-card">
+        <h4>Stream address</h4>
+        <p class="je-gp-desc">
+            The HTTPS address your reverse proxy serves game streams at. It checks each viewer's Jellyfin login with
+            JellyEmu, then sends them on to the right gaming PC.
+        </p>
+        <input type="text" id="je-gp-origin" class="emby-input" placeholder="https://stream.example.com" />
+        <details>
+            <summary>Reverse proxy (Caddy) configuration</summary>
+            <p class="je-gp-desc" style="margin-top: 0.6em;">
+                For Caddy on the same machine as Jellyfin (change 127.0.0.1:8096 if it isn't). Add your usual
+                <code>tls</code> settings. Adding more gaming PCs never needs a change here.
+            </p>
+            <pre id="je-gp-caddy"></pre>
+        </details>
+
+        <h4 style="margin-top: 1.6em;">Library paths</h4>
+        <p class="je-gp-desc">
+            Where gaming PCs find the games: each folder as Jellyfin sees it, and the same folder from a gaming PC
+            (usually a network share). Setup asks for the share's sign-in on each PC if it needs one.
+        </p>
+        <div id="je-gp-paths"></div>
+        <button type="button" class="je-gp-btn je-gp-quiet" id="je-gp-addpath">Add a folder</button>
+        <div style="margin-top: 1.4em;">
+            <button type="button" class="je-gp-btn" id="je-gp-save">Save</button>
+            <span class="je-gp-status" id="je-gp-saved"></span>
+        </div>
+    </div>
+</div>

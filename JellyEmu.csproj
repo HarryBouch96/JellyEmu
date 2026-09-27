@@ -59,6 +59,7 @@
     <EmbeddedResource Include="Web/play.setting.js" />
     <EmbeddedResource Include="Web/jellyemu.utils.js" />
     <EmbeddedResource Include="Web/stream/*.js" />
+    <EmbeddedResource Include="PcSetup/*" />
     <!-- Frontend Injection Modules -->
     <EmbeddedResource Include="Web/Injection/*" />
     <!-- Resources -->
@@ -76,6 +77,11 @@
 
   <ItemGroup Condition="'$(Configuration)' == 'Release'">
     <Compile Remove="Tests\**" />
+  </ItemGroup>
+
+  <!-- Files for gaming PCs (served by JellyEmuStreamPcController), not part of the plugin's code. -->
+  <ItemGroup>
+    <Compile Remove="PcSetup\**" />
   </ItemGroup>
 
 </Project>

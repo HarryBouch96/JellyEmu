@@ -7,6 +7,7 @@
     var tabTemplateMap = {
         'statistics': 'StatisticsTab',
         'settings': 'SettingsTab',
+        'gamingpcs': 'GamingPcsTab',
         'marketplace': 'MarketplaceTab',
         'api': 'ApiTab',
         'about': 'AboutTab',
@@ -77,6 +78,10 @@
         } else if (tabId === 'settings') {
             if (window.jeInitSettingsTab) {
                 window.jeInitSettingsTab(page);
+            }
+        } else if (tabId === 'gamingpcs') {
+            if (window.jeInitGamingPcsTab) {
+                window.jeInitGamingPcsTab(page);
             }
         } else if (tabId === 'marketplace') {
             loadProviders();

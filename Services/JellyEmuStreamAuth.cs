@@ -18,12 +18,19 @@ namespace JellyEmu.Services
     {
         public const string CookieName = "je_stream";
         public const string UserHeader = "X-JellyEmu-Stream-User";
+        /// <summary>
+        /// "host:port" of the bridge Caddy should send the request to, set by the check. Caddy must
+        /// remove any copy sent by the client before asking (see the Caddy config in the Gaming PCs tab).
+        /// </summary>
+        public const string UpstreamHeader = "X-JellyEmu-Upstream";
         public static readonly TimeSpan PassLifetime = TimeSpan.FromSeconds(60);
         public static readonly TimeSpan SessionLifetime = TimeSpan.FromHours(12);
 
         private static readonly ConcurrentDictionary<string, DateTimeOffset> UsedPasses = new();
 
-        public record Claims(string Kind, string UserId, string ItemId, long HostId, long AppId, long Expires, string Nonce);
+        /// <param name="Device">The gaming PC's id (host ids are only unique per bridge). Null in
+        /// passes and sessions made before PCs had ids in them; those are matched by host id.</param>
+        public record Claims(string Kind, string UserId, string ItemId, long HostId, long AppId, long Expires, string Nonce, string? Device = null);
 
         // ---- Signing ------------------------------------------------------------------------
 
